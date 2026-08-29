@@ -1,0 +1,7 @@
+{
+  "indexes": [
+    { "collectionGroup": "lotteryEntries", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "roundId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] },
+    { "collectionGroup": "lotteryEntries", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "roundId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }] }
+  ],
+  "fieldOverrides": []
+}
