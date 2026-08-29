@@ -9,6 +9,7 @@ export type EntryStatus = (typeof entryStatuses)[number];
 export interface LotterySettings {
   roundId: string;
   state: LotteryState;
+  availableKinds: LotteryKind[];
   drawnKinds: LotteryKind[];
   counterWinnerSlots: number;
   privateWinnerSlots: number;
@@ -55,7 +56,7 @@ export interface AdminLotterySnapshot {
 }
 
 export interface PublicLotterySnapshot {
-  settings: Pick<LotterySettings, 'roundId' | 'state' | 'drawnKinds' | 'lastUpdatedAt'>;
+  settings: Pick<LotterySettings, 'roundId' | 'state' | 'availableKinds' | 'drawnKinds' | 'lastUpdatedAt'>;
   entry: Omit<LotteryEntry, 'normalizedIds' | 'previousWinnerCode'> | null;
 }
 

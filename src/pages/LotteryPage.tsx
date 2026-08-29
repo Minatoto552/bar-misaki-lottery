@@ -40,6 +40,11 @@ export const LotteryPage = () => {
     return () => { window.clearInterval(interval); window.removeEventListener(LOTTERY_UPDATED_EVENT, onUpdate); window.removeEventListener('focus', onUpdate); };
   }, [refresh]);
 
+  useEffect(() => {
+    const available = snapshot?.settings.availableKinds;
+    if (available?.length && !available.includes(kind)) setKind(available[0]);
+  }, [snapshot?.settings.availableKinds, kind]);
+
   const submit = async () => {
     const parsed = submitLotterySchema.safeParse({ kind, representativeId, representativeVrcName, companionVrcName, token });
     if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? '入力内容を確認してください'); return; }
@@ -68,6 +73,7 @@ export const LotteryPage = () => {
 
   const entry = snapshot?.entry;
   const isPublished = snapshot?.settings.state === 'published';
+  const availableKinds = snapshot?.settings.availableKinds ?? [];
 
   return (
     <main className="relative min-h-screen w-full overflow-hidden text-[var(--color-text)]">
@@ -95,14 +101,14 @@ export const LotteryPage = () => {
             <div>
               <p className="mb-3 flex items-center gap-2 text-sm font-bold tracking-[0.16em] text-[var(--color-accent)]"><Ticket size={18} /> BAR MISAKI LOTTERY</p>
               <h1 className="hero-heading mb-4">特別な夜への<br />抽選に応募する</h1>
-              <p className="mb-7 max-w-lg text-sm leading-relaxed opacity-70">応募する席を選び、代表者のX IDと全員のVRC名をご登録ください。1件の応募を1組として抽選します。</p>
+              <p className="mb-7 max-w-lg text-sm leading-relaxed opacity-70">現在募集中の席を選び、代表者のX IDと全員のVRC名をご登録ください。1件の応募を1組として抽選します。</p>
               {notice ? <p className="mb-5 rounded-2xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700" role="status">{notice}</p> : null}
-              <div className="mb-6 grid grid-cols-3 gap-2 sm:gap-3" role="radiogroup" aria-label="応募先">
-                {(['counter', 'private', 'table'] as const).map((option) => { const selected = kind === option; const Icon = option === 'counter' ? Users : option === 'private' ? DoorOpen : Armchair; return <button aria-checked={selected} className={`rounded-3xl border p-3 text-left transition sm:p-4 ${selected ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white shadow-lg' : 'border-white/50 bg-white/45 hover:bg-white/65'}`} key={option} onClick={() => setKind(option)} role="radio" type="button"><Icon className="mb-5" size={24} /><strong className="block text-sm sm:text-lg">{kindLabels[option]}</strong><span className="mt-1 block text-[10px] opacity-70 sm:text-xs">{option === 'counter' ? '2名1組' : '1〜2名1組'}</span></button>; })}
-              </div>
+              {availableKinds.length ? <div className={`mb-6 grid gap-2 sm:gap-3 ${availableKinds.length === 1 ? 'grid-cols-1' : availableKinds.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`} role="radiogroup" aria-label="応募先">
+                {availableKinds.map((option) => { const selected = kind === option; const Icon = option === 'counter' ? Users : option === 'private' ? DoorOpen : Armchair; return <button aria-checked={selected} className={`rounded-3xl border p-3 text-left transition sm:p-4 ${selected ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white shadow-lg' : 'border-white/50 bg-white/45 hover:bg-white/65'}`} key={option} onClick={() => setKind(option)} role="radio" type="button"><Icon className="mb-5" size={24} /><strong className="block text-sm sm:text-lg">{kindLabels[option]}</strong><span className="mt-1 block text-[10px] opacity-70 sm:text-xs">{option === 'counter' ? '2名1組' : '1〜2名1組'}</span></button>; })}
+              </div> : <p className="mb-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">現在選択できる募集項目がありません。</p>}
               <div className="space-y-4"><label className="block text-sm font-semibold">代表者のX ID<span className="ml-1 text-[var(--color-accent)]">*</span><input className="mt-2 w-full rounded-2xl border border-white/70 bg-white/65 px-4 py-3.5 outline-none transition focus:border-[var(--color-accent)]" maxLength={16} onChange={(event) => setRepresentativeId(event.target.value)} placeholder="@misaki" value={representativeId} /></label><label className="block text-sm font-semibold">代表者のVRC名<span className="ml-1 text-[var(--color-accent)]">*</span><input className="mt-2 w-full rounded-2xl border border-white/70 bg-white/65 px-4 py-3.5 outline-none transition focus:border-[var(--color-accent)]" maxLength={32} onChange={(event) => setRepresentativeVrcName(event.target.value)} placeholder="Misaki_VRC" value={representativeVrcName} /></label><label className="block text-sm font-semibold">同行者のVRC名{kind === 'counter' ? <span className="ml-1 text-[var(--color-accent)]">*</span> : <span className="ml-2 text-xs font-normal opacity-50">1名で応募する場合は空欄</span>}<input className="mt-2 w-full rounded-2xl border border-white/70 bg-white/65 px-4 py-3.5 outline-none transition focus:border-[var(--color-accent)]" maxLength={32} onChange={(event) => setCompanionVrcName(event.target.value)} placeholder="Partner_VRC" value={companionVrcName} /></label></div>
               {error ? <p className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700" role="alert">{error}</p> : null}
-              <motion.button className="mt-6 flex w-full items-center justify-between rounded-full bg-[var(--color-accent)] px-6 py-[17px] font-semibold text-white shadow-[0_4px_24px_rgba(115,66,226,0.28)] disabled:opacity-55" disabled={submitting} onClick={() => void submit()} type="button" whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}><span>{submitting ? '応募を送信中...' : 'この内容で応募する'}</span><Ticket size={20} /></motion.button>
+              <motion.button className="mt-6 flex w-full items-center justify-between rounded-full bg-[var(--color-accent)] px-6 py-[17px] font-semibold text-white shadow-[0_4px_24px_rgba(115,66,226,0.28)] disabled:opacity-55" disabled={submitting || !availableKinds.length} onClick={() => void submit()} type="button" whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}><span>{submitting ? '応募を送信中...' : 'この内容で応募する'}</span><Ticket size={20} /></motion.button>
             </div>
           ) : <div className="py-12 text-center"><h1 className="hero-heading mb-4">現在は応募受付を終了しています</h1><p className="opacity-70">次回の抽選受付開始までお待ちください。</p></div>}
           {!entry && error && snapshot?.settings.state !== 'accepting' ? <p className="mt-5 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}

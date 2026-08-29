@@ -23,14 +23,14 @@ const tokens = db.collection('lotteryTokens');
 const audits = db.collection('lotteryAuditLogs');
 const nowIso = () => new Date().toISOString();
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
-const defaultSettings = (): LotterySettings => ({ roundId: `round-${crypto.randomUUID()}`, state: 'accepting', drawnKinds: [], counterWinnerSlots: 0, privateWinnerSlots: 0, tableWinnerSlots: 0, vacantCounterSlots: 0, vacantPrivateSlots: 0, vacantTableSlots: 0, publishedAt: null, lastUpdatedAt: nowIso() });
+const defaultSettings = (): LotterySettings => ({ roundId: `round-${crypto.randomUUID()}`, state: 'accepting', availableKinds: ['counter', 'private', 'table'], drawnKinds: [], counterWinnerSlots: 0, privateWinnerSlots: 0, tableWinnerSlots: 0, vacantCounterSlots: 0, vacantPrivateSlots: 0, vacantTableSlots: 0, publishedAt: null, lastUpdatedAt: nowIso() });
 
 const ensureRuntime = async (): Promise<LotterySettings> => {
   const snapshot = await RUNTIME.get();
   if (snapshot.exists) {
     const stored = snapshot.data() as LotterySettings;
-    const settings = { ...stored, drawnKinds: stored.drawnKinds ?? ['counter', 'private'], tableWinnerSlots: stored.tableWinnerSlots ?? 0, vacantTableSlots: stored.vacantTableSlots ?? 0 };
-    if (stored.drawnKinds === undefined || stored.tableWinnerSlots === undefined || stored.vacantTableSlots === undefined) await RUNTIME.update(settings);
+    const settings = { ...stored, availableKinds: stored.availableKinds ?? ['counter', 'private', 'table'], drawnKinds: stored.drawnKinds ?? ['counter', 'private'], tableWinnerSlots: stored.tableWinnerSlots ?? 0, vacantTableSlots: stored.vacantTableSlots ?? 0 };
+    if (stored.availableKinds === undefined || stored.drawnKinds === undefined || stored.tableWinnerSlots === undefined || stored.vacantTableSlots === undefined) await RUNTIME.update(settings);
     return settings;
   }
   const settings = defaultSettings();
@@ -94,6 +94,8 @@ export const submitLotteryEntry = onCall(async (request) => {
     const runtimeSnapshot = await transaction.get(RUNTIME);
     const settings = runtimeSnapshot.exists ? runtimeSnapshot.data() as LotterySettings : defaultSettings();
     if (settings.state !== 'accepting') throw new HttpsError('failed-precondition', '現在は応募を受け付けていません');
+    const availableKinds = settings.availableKinds ?? ['counter', 'private', 'table'];
+    if (!availableKinds.includes(input.kind)) throw new HttpsError('failed-precondition', 'この募集項目は現在受け付けていません');
     const tokenRef = tokens.doc(`${settings.roundId}_${tokenHash}`);
     const markerRefs = normalizedIds.map((id) => identifiers.doc(`${settings.roundId}_${hash(id)}`));
     const [tokenSnapshot, ...markerSnapshots] = await Promise.all([transaction.get(tokenRef), ...markerRefs.map((ref) => transaction.get(ref))]);
@@ -160,7 +162,7 @@ export const getLotteryStatus = onCall(async (request): Promise<PublicLotterySna
       };
     }
   }
-  return { settings: { roundId: settings.roundId, state: settings.state, drawnKinds: settings.drawnKinds, lastUpdatedAt: settings.lastUpdatedAt }, entry };
+  return { settings: { roundId: settings.roundId, state: settings.state, availableKinds: settings.availableKinds, drawnKinds: settings.drawnKinds, lastUpdatedAt: settings.lastUpdatedAt }, entry };
 });
 
 export const getAdminLottery = onCall(async (request): Promise<AdminLotterySnapshot> => {
@@ -168,6 +170,23 @@ export const getAdminLottery = onCall(async (request): Promise<AdminLotterySnaps
   const settings = await ensureRuntime();
   const [entrySnapshots, auditSnapshots] = await Promise.all([entries.where('roundId', '==', settings.roundId).orderBy('createdAt', 'desc').get(), audits.orderBy('createdAt', 'desc').limit(100).get()]);
   return { settings, entries: entrySnapshots.docs.map((doc) => doc.data() as LotteryEntry), audits: auditSnapshots.docs.map((doc) => ({ id: doc.id, ...doc.data() } as LotteryAuditLog)) };
+});
+
+export const updateAvailableLotteryKinds = onCall(async (request) => {
+  const actor = assertAdmin(request);
+  const allKinds: LotteryKind[] = ['counter', 'private', 'table'];
+  const requestedKinds = Array.isArray(request.data?.availableKinds) ? request.data.availableKinds.map(String) : [];
+  const availableKinds = allKinds.filter((kind) => requestedKinds.includes(kind));
+  if (!availableKinds.length) throw new HttpsError('invalid-argument', '募集項目を1つ以上選択してください');
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(RUNTIME);
+    const settings = snapshot.exists ? snapshot.data() as LotterySettings : defaultSettings();
+    if (settings.state !== 'accepting') throw new HttpsError('failed-precondition', '募集項目は応募受付中のみ変更できます');
+    transaction.set(RUNTIME, { ...settings, availableKinds, lastUpdatedAt: nowIso() });
+  });
+  const labels: Record<LotteryKind, string> = { counter: 'カウンター', private: '個室', table: 'テーブル席' };
+  await writeAudit(actor, '募集項目更新', 'all', `${availableKinds.map((kind) => labels[kind]).join('、')}を募集中に設定`);
+  return { ok: true };
 });
 
 export const runLottery = onCall(async (request) => {

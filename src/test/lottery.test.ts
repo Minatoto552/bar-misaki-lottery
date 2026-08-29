@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { cancelLotteryEntry, ensureDeviceToken, getAdminLotterySnapshot, getPublicLotterySnapshot, loginAdmin, publishLotteryResults, resetLottery, runLottery, submitLotteryEntry } from '../lib/lottery-api';
+import { cancelLotteryEntry, ensureDeviceToken, getAdminLotterySnapshot, getPublicLotterySnapshot, loginAdmin, publishLotteryResults, resetLottery, runLottery, submitLotteryEntry, updateAvailableLotteryKinds } from '../lib/lottery-api';
 
 const token = (suffix: string) => `00000000-0000-4000-8000-000000000000-00000000-0000-4000-8000-${suffix.padStart(12, '0')}`;
 
@@ -26,6 +26,16 @@ describe('Bar Misaki lottery demo flow', () => {
     expect((await getPublicLotterySnapshot(deviceToken)).entry).toBeNull();
     await submitLotteryEntry({ kind: 'table', representativeId: '@CANCEL_ME', representativeVrcName: 'Table Leader', token: deviceToken });
     expect((await getPublicLotterySnapshot(deviceToken)).entry?.peopleCount).toBe(1);
+  });
+
+  it('lets admins control which recruitment categories accept applications', async () => {
+    await loginAdmin('1112');
+    await updateAvailableLotteryKinds(['counter', 'private']);
+    const publicSnapshot = await getPublicLotterySnapshot(token('7'));
+    expect(publicSnapshot.settings.availableKinds).toEqual(['counter', 'private']);
+    await expect(submitLotteryEntry({ kind: 'table', representativeId: '@closed_table', representativeVrcName: 'Closed Table', token: token('7') })).rejects.toThrow('現在受け付けていません');
+    await submitLotteryEntry({ kind: 'private', representativeId: '@open_private', representativeVrcName: 'Open Private', token: token('8') });
+    await expect(updateAvailableLotteryKinds([])).rejects.toThrow('1つ以上');
   });
 
   it('can exclude a seat type from the draw while preserving its application', async () => {

@@ -33,6 +33,7 @@ const initialDatabase = (): DemoDatabase => ({
   settings: {
     roundId: newRoundId(),
     state: 'accepting',
+    availableKinds: ['counter', 'private', 'table'],
     drawnKinds: [],
     counterWinnerSlots: 0,
     privateWinnerSlots: 0,
@@ -59,6 +60,7 @@ const loadDemo = (): DemoDatabase => {
     const parsed = JSON.parse(stored) as DemoDatabase;
     parsed.settings.tableWinnerSlots ??= 0;
     parsed.settings.vacantTableSlots ??= 0;
+    parsed.settings.availableKinds ??= ['counter', 'private', 'table'];
     parsed.settings.drawnKinds ??= ['counter', 'private'];
     parsed.entries = parsed.entries.map((entry) => {
       const legacy = entry as LotteryEntry & { companionId?: string | null };
@@ -153,6 +155,7 @@ export const submitLotteryEntry = async (input: SubmitLotteryInput): Promise<voi
 
   const database = loadDemo();
   if (database.settings.state !== 'accepting') throw new Error('現在は応募を受け付けていません');
+  if (!database.settings.availableKinds.includes(parsed.data.kind)) throw new Error('この募集項目は現在受け付けていません');
   const normalizedIds = [normalizeXIdForComparison(parsed.data.representativeId)];
   const used = new Set(
     database.entries
@@ -206,6 +209,7 @@ export const getPublicLotterySnapshot = async (token: string): Promise<PublicLot
     settings: {
       roundId: database.settings.roundId,
       state: database.settings.state,
+      availableKinds: database.settings.availableKinds,
       drawnKinds: database.settings.drawnKinds,
       lastUpdatedAt: database.settings.lastUpdatedAt,
     },
@@ -263,6 +267,24 @@ export const getAdminLotterySnapshot = async (): Promise<AdminLotterySnapshot> =
     entries: database.entries.filter((entry) => entry.roundId === database.settings.roundId),
     audits: database.audits.slice(0, 100),
   };
+};
+
+export const updateAvailableLotteryKinds = async (availableKinds: LotteryKind[]): Promise<void> => {
+  const allKinds: LotteryKind[] = ['counter', 'private', 'table'];
+  const normalized = allKinds.filter((kind) => availableKinds.includes(kind));
+  if (!normalized.length) throw new Error('募集項目を1つ以上選択してください');
+  if (!isDemoMode) {
+    await call('updateAvailableLotteryKinds', { availableKinds: normalized });
+    return;
+  }
+  let database = loadDemo();
+  if (database.settings.state !== 'accepting') throw new Error('募集項目は応募受付中のみ変更できます');
+  const timestamp = nowIso();
+  database.settings.availableKinds = normalized;
+  database.settings.lastUpdatedAt = timestamp;
+  const labels: Record<LotteryKind, string> = { counter: 'カウンター', private: '個室', table: 'テーブル席' };
+  database = withAudit(database, '募集項目更新', 'all', `${normalized.map((kind) => labels[kind]).join('、')}を募集中に設定`);
+  saveDemo(database);
 };
 
 export const runLottery = async ({ enabledKinds, winnerSlots }: LotteryDrawInput): Promise<void> => {
