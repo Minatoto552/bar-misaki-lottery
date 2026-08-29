@@ -27,7 +27,7 @@ export const GuestCoinGallery = () => (
                 style={{ backgroundImage: `url(${face.src})`, backgroundPosition: face.backgroundPosition, backgroundSize: face.backgroundSize ?? 'cover' }}
               />
               <div className="gallery-coin__face gallery-coin__back">
-                <img alt="Bar Misaki" draggable={false} src="/bar-misaki-mark.png" />
+                <img alt="Bar Misaki" draggable={false} src={`${import.meta.env.BASE_URL}bar-misaki-mark.png`} />
               </div>
             </div>
           </div>
