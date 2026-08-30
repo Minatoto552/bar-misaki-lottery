@@ -51,6 +51,7 @@ export const AdminLotteryPage = () => {
   const [availableKinds, setAvailableKinds] = useState<Set<LotteryKind>>(new Set(['counter', 'private', 'table']));
   const [availableKindsDirty, setAvailableKindsDirty] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [lockedWinners, setLockedWinners] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -66,10 +67,13 @@ export const AdminLotteryPage = () => {
   useEffect(() => {
     if (snapshot && !availableKindsDirty) setAvailableKinds(new Set(snapshot.settings.availableKinds));
   }, [snapshot, availableKindsDirty]);
+  useEffect(() => {
+    sessionStorage.setItem('bar-misaki-redraw-locks', JSON.stringify([...lockedWinners]));
+  }, [lockedWinners]);
 
   const execute = async (operation: () => Promise<void>, success: string) => {
     setBusy(true); setError(''); setMessage('');
-    try { await operation(); setMessage(success); setSelected(new Set()); await refresh(); }
+    try { await operation(); setMessage(success); setSelected(new Set()); setLockedWinners(new Set()); sessionStorage.removeItem('bar-misaki-redraw-locks'); await refresh(); }
     catch (caught) { setError(caught instanceof Error ? caught.message : '操作に失敗しました'); }
     finally { setBusy(false); }
   };
@@ -100,6 +104,7 @@ export const AdminLotteryPage = () => {
 
   return (
     <main className="min-h-screen bg-[#eef0f3] text-slate-900">
+      {snapshot?.settings.state === 'drawn' && winners.length ? <div className="mx-auto max-w-[1500px] px-5 pt-5 sm:px-7"><div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold text-emerald-950">再抽選の当選確定枠</h2><p className="mt-1 text-sm text-emerald-800">再抽選から除外する当選者にチェックを入れてください。チェックした応募は当選のまま固定されます。</p></div><span className="rounded-full bg-white/70 px-3 py-1.5 text-xs font-bold text-emerald-800">確定 {lockedWinners.size}組</span></div><div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{winners.map((entry) => <label className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm ${lockedWinners.has(entry.id) ? 'border-emerald-400 bg-white' : 'border-emerald-100 bg-white/50'}`} key={entry.id}><input checked={lockedWinners.has(entry.id)} onChange={(event) => setLockedWinners((current) => { const next = new Set(current); if (event.target.checked) next.add(entry.id); else next.delete(entry.id); return next; })} type="checkbox" /><span><strong className="block">{entry.entryNumber} · {kindLabels[entry.kind]}</strong><span className="text-xs text-slate-600">{entry.representativeVrcName}</span></span></label>)}</div></div></div> : null}
       {snapshot?.settings.state === 'drawn' ? <div className="mx-auto max-w-[1500px] px-5 pt-5 sm:px-7"><div className="flex items-center justify-between gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3"><p className="text-sm font-semibold text-indigo-900">抽選結果をやり直せます（現在の対象・当選枠を維持）</p><button className="shrink-0 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" disabled={busy} onClick={() => { if (window.confirm('現在の抽選結果を破棄し、同じ条件で抽選をやり直します。よろしいですか？')) void execute(redrawLottery, '抽選をやり直しました'); }} type="button">抽選をやり直す</button></div></div> : null}
       <header className="border-b border-slate-700 bg-slate-950 text-white"><div className="mx-auto flex max-w-[1500px] items-center justify-between px-5 py-4"><div className="flex items-center gap-3"><Link aria-label="管理ダッシュボードに戻る" className="rounded-full bg-white ring-2 ring-violet-400 ring-offset-2 ring-offset-slate-950 transition-transform hover:scale-105" onClick={() => { setActiveTab('dashboard'); setSelected(new Set()); window.scrollTo({ top: 0, behavior: 'smooth' }); }} to="/admin"><BrandMark size="sm" /></Link><div><strong className="block">Bar Misaki 抽選管理</strong><span className="text-xs text-slate-400">STAFF CONSOLE</span></div></div><div className="flex gap-2"><button aria-label="更新" className="rounded-xl border border-slate-700 p-2.5 hover:bg-slate-800" onClick={() => void refresh()} type="button"><RefreshCw size={19} /></button><button className="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800" onClick={() => void logoutAdmin().then(() => setSignedIn(false))} type="button"><LogOut size={17} />ログアウト</button></div></div></header>
       <div className="mx-auto max-w-[1500px] p-5 sm:p-7">
