@@ -51,8 +51,8 @@ export const LotteryGacha = ({ children, entryId, roundId }: { children: ReactNo
       {phase === 'selecting' ? (
         <motion.section animate={{ opacity: 1, y: 0 }} className="text-center" exit={{ opacity: 0, y: -16 }} initial={{ opacity: 0, y: 16 }} key="select" transition={{ duration: 0.35 }}>
           <p className="mb-2 text-xs font-bold tracking-[0.18em] text-[var(--color-accent)]">CAST COIN GACHA</p>
-          <h1 className="hero-heading mb-3">運命のキャストコインを選ぶ</h1>
-          <p className="mx-auto mb-6 max-w-md text-sm leading-relaxed opacity-70">好きなコインを1枚選んで、抽選結果を開封してください。コインは結果を開く演出のため、確定済みの当落は変わりません。</p>
+          <h1 className="hero-heading mb-3">キャストコインを選ぶ</h1>
+          <p className="mx-auto mb-6 max-w-md text-sm leading-relaxed opacity-70">好きなコインを1枚選んで、ガチャを行ってください。</p>
           <div aria-label="キャストコインを選択" className="grid grid-cols-3 gap-3 sm:grid-cols-5" role="radiogroup">
             {coinFaces.map((face, index) => {
               const selected = selectedCoin === index;
@@ -72,7 +72,7 @@ export const LotteryGacha = ({ children, entryId, roundId }: { children: ReactNo
               <motion.div animate={{ opacity: [0.25, 0.75, 0.25], scale: [0.75, 1.35, 0.75] }} className="absolute inset-0 rounded-full bg-[var(--color-accent)]/25 blur-2xl" transition={{ duration: 1.15, repeat: Infinity }} />
               <motion.div animate={{ rotateY: 1440, rotateZ: [0, -8, 8, 0], scale: [0.72, 1.08, 0.92, 1] }} className="absolute inset-2" transition={{ duration: 2.25, ease: [0.22, 1, 0.36, 1] }}><CoinPortrait className="h-full w-full" index={selectedCoin!} /></motion.div>
             </div>
-            <p className="mt-8 text-sm font-bold tracking-[0.16em] text-[var(--color-accent)]">抽選結果を開封中...</p>
+            <p className="mt-8 text-sm font-bold tracking-[0.16em] text-[var(--color-accent)]">抽選結果を確認中..</p>
           </div>
         </motion.section>
       )}

@@ -63,7 +63,7 @@ export const LotteryPage = () => {
       setRepresentativeId('');
       setRepresentativeVrcName('');
       setCompanionVrcName('');
-      setNotice('応募をキャンセルしました。同じX IDで再応募できます。');
+      setNotice('応募をキャンセルしました。');
       await refresh();
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -90,7 +90,7 @@ export const LotteryPage = () => {
                   {entry.status === 'winner' ? <div className="text-center"><div className="mx-auto mb-4 grid h-20 w-20 place-items-center rounded-full bg-[var(--color-accent)] text-white shadow-[0_12px_36px_rgba(115,66,226,0.3)]"><Crown size={38} /></div><p className="mb-2 text-sm font-bold tracking-[0.18em] text-[var(--color-accent)]">CONGRATULATIONS</p><h1 className="hero-heading mb-3">当選しました！</h1><p className="opacity-75">受付時にこの画面をご提示ください</p><div className="my-7 rounded-3xl bg-[#192837] px-5 py-7 text-white"><span className="mb-2 block text-xs font-semibold tracking-[0.2em] opacity-60">WINNER CODE</span><strong className="font-mono text-[clamp(1.8rem,8vw,2.8rem)] tracking-[0.12em]">{entry.winnerCode}</strong></div></div> : <div className="py-4 text-center"><div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-white/70"><Sparkles size={30} /></div><h1 className="hero-heading mb-4">今回は落選となりました</h1><p className="leading-relaxed opacity-75">ご応募ありがとうございました。次回のBar Misakiもぜひお楽しみに。</p></div>}
                 </LotteryGacha>
               ) : isPublished ? (
-                <div className="py-4 text-center"><div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-white/70"><Ticket size={30} /></div><h1 className="hero-heading mb-4">今回は抽選対象外です</h1><p className="leading-relaxed opacity-75">この応募項目は今回の抽選から除外されました。当落は付与されていません。</p></div>
+                <div className="py-4 text-center"><div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-white/70"><Ticket size={30} /></div><h1 className="hero-heading mb-4">この項目は、抽選対象外です</h1><p className="leading-relaxed opacity-75">この応募項目は、今回抽選を実施しておりません。</p></div>
               ) : (
                 <div className="py-2 text-center"><div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-full bg-[var(--color-accent)] text-white"><Check size={30} /></div><p className="mb-2 text-sm font-bold tracking-[0.16em] text-[var(--color-accent)]">ENTRY COMPLETE</p><h1 className="hero-heading mb-4">応募が完了しました</h1><p className="leading-relaxed opacity-75">抽選結果が公開されるまで、このままお待ちください。ページを閉じても同じ端末から確認できます。</p></div>
               )}
@@ -100,7 +100,7 @@ export const LotteryPage = () => {
           ) : snapshot?.settings.state === 'accepting' ? (
             <div>
               <p className="mb-3 flex items-center gap-2 text-sm font-bold tracking-[0.16em] text-[var(--color-accent)]"><Ticket size={18} /> BAR MISAKI LOTTERY</p>
-              <h1 className="hero-heading mb-4">特別な夜への<br />抽選に応募する</h1>
+              <h1 className="hero-heading mb-4">BarMisaki<br />の抽選に応募する</h1>
               <p className="mb-7 max-w-lg text-sm leading-relaxed opacity-70">現在募集中の席を選び、代表者のX IDと全員のVRC名をご登録ください。1件の応募を1組として抽選します。</p>
               {notice ? <p className="mb-5 rounded-2xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700" role="status">{notice}</p> : null}
               {availableKinds.length ? <div className={`mb-6 grid gap-2 sm:gap-3 ${availableKinds.length === 1 ? 'grid-cols-1' : availableKinds.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`} role="radiogroup" aria-label="応募先">
@@ -136,7 +136,7 @@ export const LotteryPage = () => {
             >
               <div className="mb-5 grid h-12 w-12 place-items-center rounded-full bg-red-100 text-red-700"><Trash2 size={22} /></div>
               <h2 className="text-2xl font-bold" id="cancel-title">応募をキャンセルしますか？</h2>
-              <p className="mt-3 text-sm leading-relaxed opacity-70">現在の応募を取り消します。キャンセル後は応募ホームへ戻り、同じX IDでもう一度応募できます。</p>
+              <p className="mt-3 text-sm leading-relaxed opacity-70">現在の応募を取り消します。キャンセル後は応募ホームへ戻り、同じXのIDでもう一度応募できます。</p>
               {error ? <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-700" role="alert">{error}</p> : null}
               <div className="mt-6 grid grid-cols-2 gap-3">
                 <button className="rounded-full bg-white px-4 py-3.5 text-sm font-semibold disabled:opacity-50" disabled={submitting} onClick={() => setShowCancelConfirm(false)} type="button">戻る</button>
