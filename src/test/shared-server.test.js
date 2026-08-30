@@ -30,10 +30,10 @@ const post = async (env, name, input, sessionToken) => {
 
 describe('shared Sites backend', () => {
   it('shares an application with the admin across separate device tokens', async () => {
-    const env = { DB: new MemoryD1(), ADMIN_SHARED_PASSWORD: '1112' };
+    const env = { DB: new MemoryD1(), ADMIN_SHARED_PASSWORD: '3331' };
     const firstDevice = 'a'.repeat(64);
     expect((await post(env, 'submitLotteryEntry', { kind: 'table', representativeId: '@remote', representativeVrcName: 'Remote VRC', token: firstDevice })).status).toBe(200);
-    const login = await post(env, 'adminLogin', { password: '1112' });
+    const login = await post(env, 'adminLogin', { password: '3331' });
     const admin = await post(env, 'getAdminLottery', {}, login.body.sessionToken);
     expect(admin.body.entries).toHaveLength(1);
     expect(admin.body.entries[0].representativeId).toBe('@remote');

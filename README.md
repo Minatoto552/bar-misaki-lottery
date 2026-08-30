@@ -24,7 +24,7 @@ pnpm dev
 
 - お客様画面: `http://localhost:5173/lottery`
 - 従業員画面: `http://localhost:5173/admin`
-- デモ用初期パスワード: `1112`
+- デモ用初期パスワード: `3331`
 
 デモパスワードは `.env.local` の `VITE_DEMO_ADMIN_PASSWORD` で変更できます。デモモードはブラウザ内の動作確認専用で、本番運用には使用しないでください。
 

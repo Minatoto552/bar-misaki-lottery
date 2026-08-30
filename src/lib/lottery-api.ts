@@ -252,7 +252,7 @@ export const cancelLotteryEntry = async (token: string): Promise<void> => {
 
 export const loginAdmin = async (password: string): Promise<void> => {
   if (isDemoMode) {
-    const expected = import.meta.env.VITE_DEMO_ADMIN_PASSWORD || '1112';
+    const expected = import.meta.env.VITE_DEMO_ADMIN_PASSWORD || '3331';
     if (password !== expected) throw new Error('パスワードが正しくありません');
     sessionStorage.setItem(ADMIN_KEY, 'true');
     return;

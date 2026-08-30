@@ -29,7 +29,7 @@ describe('Bar Misaki lottery demo flow', () => {
   });
 
   it('lets admins control which recruitment categories accept applications', async () => {
-    await loginAdmin('1112');
+    await loginAdmin('3331');
     await updateAvailableLotteryKinds(['counter', 'private']);
     const publicSnapshot = await getPublicLotterySnapshot(token('7'));
     expect(publicSnapshot.settings.availableKinds).toEqual(['counter', 'private']);
@@ -41,7 +41,7 @@ describe('Bar Misaki lottery demo flow', () => {
   it('can exclude a seat type from the draw while preserving its application', async () => {
     await submitLotteryEntry({ kind: 'counter', representativeId: '@counter', representativeVrcName: 'Counter', companionVrcName: 'Counter Partner', token: token('5') });
     await submitLotteryEntry({ kind: 'table', representativeId: '@table', representativeVrcName: 'Table', token: token('6') });
-    await loginAdmin('1112');
+    await loginAdmin('3331');
     await runLottery({ enabledKinds: ['counter'], winnerSlots: { counter: 1, private: 0, table: 1 } });
     const admin = await getAdminLotterySnapshot();
     expect(admin.entries.find((entry) => entry.kind === 'counter')?.status).toBe('winner');
@@ -54,7 +54,7 @@ describe('Bar Misaki lottery demo flow', () => {
   it('hides results until publication, then exposes the predetermined result', async () => {
     const deviceToken = ensureDeviceToken();
     await submitLotteryEntry({ kind: 'table', representativeId: '@misaki_test', representativeVrcName: 'Misaki Test', companionVrcName: 'Partner 01', token: deviceToken });
-    await loginAdmin('1112');
+    await loginAdmin('3331');
     await runLottery({ enabledKinds: ['table'], winnerSlots: { counter: 0, private: 0, table: 1 } });
     const beforePublish = await getPublicLotterySnapshot(deviceToken);
     expect(beforePublish.settings.state).toBe('drawn');
