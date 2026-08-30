@@ -12,6 +12,8 @@ const config: FirebaseOptions = {
 };
 
 const configured = Boolean(config.apiKey && config.authDomain && config.projectId && config.appId);
+const configuredSharedApiUrl = String(import.meta.env.VITE_SHARED_API_URL ?? '').trim().replace(/\/$/, '');
+export const sharedApiBaseUrl = configuredSharedApiUrl || (window.location.hostname.endsWith('.chatgpt.site') ? window.location.origin : null);
 let auth: Auth | null = null;
 let functions: Functions | null = null;
 
@@ -22,4 +24,6 @@ if (configured) {
 }
 
 export const firebaseServices = { auth, functions };
-export const isDemoMode = !configured;
+export const isFirebaseMode = configured;
+export const isSharedApiMode = Boolean(sharedApiBaseUrl);
+export const isDemoMode = !configured && !sharedApiBaseUrl;

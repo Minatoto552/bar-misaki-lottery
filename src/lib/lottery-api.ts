@@ -12,11 +12,12 @@ import type {
   SubmitLotteryInput,
 } from '../../shared/models';
 import { normalizeXIdForComparison, submitLotterySchema, validateWinnerSlots } from '../../shared/validation';
-import { firebaseServices, isDemoMode } from './firebase';
+import { firebaseServices, isDemoMode, isSharedApiMode, sharedApiBaseUrl } from './firebase';
 
 const DB_KEY = 'bar-misaki-lottery-demo-v1';
 const TOKEN_KEY = 'bar-misaki-lottery-device-token-v1';
 const ADMIN_KEY = 'bar-misaki-lottery-admin-session-v1';
+const SHARED_ADMIN_KEY = 'bar-misaki-lottery-shared-admin-token-v1';
 export const LOTTERY_UPDATED_EVENT = 'bar-misaki-lottery-updated';
 
 interface DemoDatabase {
@@ -105,6 +106,17 @@ const withAudit = (
 });
 
 const call = async <TInput, TOutput>(name: string, input: TInput): Promise<TOutput> => {
+  if (isSharedApiMode && sharedApiBaseUrl) {
+    const token = sessionStorage.getItem(SHARED_ADMIN_KEY);
+    const response = await fetch(`${sharedApiBaseUrl}/api/${name}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(input ?? {}),
+    });
+    const body = await response.json() as { error?: string } & TOutput;
+    if (!response.ok) throw new Error(body.error || 'サーバーとの通信に失敗しました');
+    return body;
+  }
   if (!firebaseServices.functions) throw new Error('Firebase Functionsが設定されていません');
   const result = await httpsCallable<TInput, TOutput>(firebaseServices.functions, name)(input);
   return result.data;
@@ -245,6 +257,11 @@ export const loginAdmin = async (password: string): Promise<void> => {
     sessionStorage.setItem(ADMIN_KEY, 'true');
     return;
   }
+  if (isSharedApiMode) {
+    const { sessionToken } = await call<{ password: string }, { sessionToken: string }>('adminLogin', { password });
+    sessionStorage.setItem(SHARED_ADMIN_KEY, sessionToken);
+    return;
+  }
   if (!firebaseServices.auth) throw new Error('Firebase Authenticationが設定されていません');
   const { customToken } = await call<{ password: string }, { customToken: string }>('adminLogin', { password });
   await signInWithCustomToken(firebaseServices.auth, customToken);
@@ -252,11 +269,12 @@ export const loginAdmin = async (password: string): Promise<void> => {
 
 export const logoutAdmin = async (): Promise<void> => {
   sessionStorage.removeItem(ADMIN_KEY);
+  sessionStorage.removeItem(SHARED_ADMIN_KEY);
   if (firebaseServices.auth) await signOut(firebaseServices.auth);
 };
 
 export const isAdminSessionActive = (): boolean =>
-  isDemoMode ? sessionStorage.getItem(ADMIN_KEY) === 'true' : Boolean(firebaseServices.auth?.currentUser);
+  isDemoMode ? sessionStorage.getItem(ADMIN_KEY) === 'true' : isSharedApiMode ? Boolean(sessionStorage.getItem(SHARED_ADMIN_KEY)) : Boolean(firebaseServices.auth?.currentUser);
 
 export const getAdminLotterySnapshot = async (): Promise<AdminLotterySnapshot> => {
   if (!isDemoMode) return call('getAdminLottery', {});
