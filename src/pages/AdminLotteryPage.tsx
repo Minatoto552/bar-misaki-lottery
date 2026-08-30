@@ -68,12 +68,6 @@ export const AdminLotteryPage = () => {
     if (snapshot && !availableKindsDirty) setAvailableKinds(new Set(snapshot.settings.availableKinds));
   }, [snapshot, availableKindsDirty]);
   useEffect(() => {
-    if (snapshot?.settings.state !== 'accepting') return;
-    setCounterSlots((value) => value || counts.counter.groups);
-    setPrivateSlots((value) => value || counts.private.groups);
-    setTableSlots((value) => value || counts.table.groups);
-  }, [snapshot?.settings.roundId, snapshot?.settings.state, counts.counter.groups, counts.private.groups, counts.table.groups]);
-  useEffect(() => {
     sessionStorage.setItem('bar-misaki-redraw-locks', JSON.stringify([...lockedWinners]));
   }, [lockedWinners]);
 
@@ -96,6 +90,12 @@ export const AdminLotteryPage = () => {
     const make = (kind: LotteryKind) => { const items = entries.filter((entry) => entry.kind === kind); return { groups: items.length, people: items.reduce((sum, entry) => sum + entry.peopleCount, 0) }; };
     return { counter: make('counter'), private: make('private'), table: make('table') };
   }, [entries]);
+  useEffect(() => {
+    if (snapshot?.settings.state !== 'accepting') return;
+    setCounterSlots((value) => value || counts.counter.groups);
+    setPrivateSlots((value) => value || counts.private.groups);
+    setTableSlots((value) => value || counts.table.groups);
+  }, [snapshot?.settings.roundId, snapshot?.settings.state, counts.counter.groups, counts.private.groups, counts.table.groups]);
   const filteredEntries = useMemo(() => {
     const kind = activeTab as LotteryKind;
     const needle = search.trim().toLowerCase();
