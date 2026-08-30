@@ -86,7 +86,7 @@ export const LotteryPage = () => {
             <div className="space-y-6">
               <div className="flex items-center justify-between gap-4"><span className="rounded-full bg-white/65 px-4 py-2 text-xs font-bold tracking-wider">{stateLabels[snapshot!.settings.state]}</span><span className="text-xs font-semibold opacity-55">{entry.entryNumber}</span></div>
               {isPublished && entry.status !== 'pending' ? (
-                <LotteryGacha entryId={entry.id} roundId={snapshot!.settings.roundId}>
+                <LotteryGacha entryId={entry.id} resultVersion={entry.updatedAt} roundId={snapshot!.settings.roundId}>
                   {entry.status === 'winner' ? <div className="text-center"><div className="mx-auto mb-4 grid h-20 w-20 place-items-center rounded-full bg-[var(--color-accent)] text-white shadow-[0_12px_36px_rgba(115,66,226,0.3)]"><Crown size={38} /></div><p className="mb-2 text-sm font-bold tracking-[0.18em] text-[var(--color-accent)]">CONGRATULATIONS</p><h1 className="hero-heading mb-3">当選しました！</h1><p className="opacity-75">受付時にこの画面をご提示ください</p><div className="my-7 rounded-3xl bg-[#192837] px-5 py-7 text-white"><span className="mb-2 block text-xs font-semibold tracking-[0.2em] opacity-60">WINNER CODE</span><strong className="font-mono text-[clamp(1.8rem,8vw,2.8rem)] tracking-[0.12em]">{entry.winnerCode}</strong></div></div> : <div className="py-4 text-center"><div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-white/70"><Sparkles size={30} /></div><h1 className="hero-heading mb-4">今回は落選となりました</h1><p className="leading-relaxed opacity-75">ご応募ありがとうございました。次回のBar Misakiもぜひお楽しみに。</p></div>}
                 </LotteryGacha>
               ) : isPublished ? (

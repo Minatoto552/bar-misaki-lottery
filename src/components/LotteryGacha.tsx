@@ -6,11 +6,11 @@ import { coinFaces } from './coin-faces';
 
 type SavedGacha = { selectedCoin: number; revealed: boolean };
 
-const storageKey = (roundId: string, entryId: string) => `bar-misaki-gacha-v1:${roundId}:${entryId}`;
+const storageKey = (roundId: string, entryId: string, resultVersion: string) => `bar-misaki-gacha-v1:${roundId}:${entryId}:${resultVersion}`;
 
-const readSavedGacha = (roundId: string, entryId: string): SavedGacha | null => {
+const readSavedGacha = (roundId: string, entryId: string, resultVersion: string): SavedGacha | null => {
   try {
-    const value = localStorage.getItem(storageKey(roundId, entryId));
+    const value = localStorage.getItem(storageKey(roundId, entryId, resultVersion));
     if (!value) return null;
     const parsed = JSON.parse(value) as SavedGacha;
     return Number.isInteger(parsed.selectedCoin) && parsed.selectedCoin >= 0 && parsed.selectedCoin < coinFaces.length ? parsed : null;
@@ -30,19 +30,19 @@ const CoinPortrait = ({ index, className = '' }: { index: number; className?: st
   );
 };
 
-export const LotteryGacha = ({ children, entryId, roundId }: { children: ReactNode; entryId: string; roundId: string }) => {
-  const saved = readSavedGacha(roundId, entryId);
+export const LotteryGacha = ({ children, entryId, roundId, resultVersion }: { children: ReactNode; entryId: string; roundId: string; resultVersion: string }) => {
+  const saved = readSavedGacha(roundId, entryId, resultVersion);
   const [selectedCoin, setSelectedCoin] = useState<number | null>(saved?.selectedCoin ?? null);
   const [phase, setPhase] = useState<'selecting' | 'spinning' | 'revealed'>(saved?.revealed ? 'revealed' : 'selecting');
 
   useEffect(() => {
     if (phase !== 'spinning' || selectedCoin === null) return;
     const timer = window.setTimeout(() => {
-      localStorage.setItem(storageKey(roundId, entryId), JSON.stringify({ selectedCoin, revealed: true } satisfies SavedGacha));
+      localStorage.setItem(storageKey(roundId, entryId, resultVersion), JSON.stringify({ selectedCoin, revealed: true } satisfies SavedGacha));
       setPhase('revealed');
     }, 2400);
     return () => window.clearTimeout(timer);
-  }, [entryId, phase, roundId, selectedCoin]);
+  }, [entryId, phase, resultVersion, roundId, selectedCoin]);
 
   if (phase === 'revealed') return <>{children}</>;
 

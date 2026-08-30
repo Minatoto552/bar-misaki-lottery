@@ -365,6 +365,43 @@ export const runLottery = async ({ enabledKinds, winnerSlots }: LotteryDrawInput
   saveDemo(database);
 };
 
+export const redrawLottery = async (): Promise<void> => {
+  if (!isDemoMode) {
+    await call('redrawLottery', {});
+    return;
+  }
+  let database = loadDemo();
+  if (database.settings.state !== 'drawn') throw new Error('抽選済みの結果がある場合のみ再抽選できます');
+  const current = database.entries.filter((entry) => entry.roundId === database.settings.roundId);
+  const slots: Record<LotteryKind, number> = {
+    counter: database.settings.counterWinnerSlots,
+    private: database.settings.privateWinnerSlots,
+    table: database.settings.tableWinnerSlots,
+  };
+  const candidates = Object.fromEntries((['counter', 'private', 'table'] as LotteryKind[]).map((kind) => [
+    kind,
+    current.filter((entry) => entry.kind === kind && entry.status !== 'excluded'),
+  ])) as Record<LotteryKind, LotteryEntry[]>;
+  for (const kind of ['counter', 'private', 'table'] as LotteryKind[]) {
+    if (slots[kind] > candidates[kind].length) throw new Error(`${kind}の再抽選枠を満たせる応募がありません`);
+  }
+  const winnerIds = new Set((['counter', 'private', 'table'] as LotteryKind[]).flatMap((kind) =>
+    database.settings.drawnKinds.includes(kind) ? choose(candidates[kind], slots[kind]).map((entry) => entry.id) : [],
+  ));
+  const issuedCodes = new Set<string>();
+  const timestamp = nowIso();
+  database.entries = database.entries.map((entry) => entry.roundId !== database.settings.roundId || entry.status === 'excluded'
+    ? entry
+    : { ...entry, status: winnerIds.has(entry.id) ? 'winner' : 'pending', winnerCode: winnerIds.has(entry.id) ? winnerCode(issuedCodes) : null, previousWinnerCode: null, drawnAt: timestamp, updatedAt: timestamp });
+  database.settings.vacantCounterSlots = 0;
+  database.settings.vacantPrivateSlots = 0;
+  database.settings.vacantTableSlots = 0;
+  database.settings.publishedAt = null;
+  database.settings.lastUpdatedAt = timestamp;
+  database = withAudit(database, '抽選やり直し', 'all', '同じ当選枠・対象で再抽選');
+  saveDemo(database);
+};
+
 export const excludeWinners = async (entryIds: string[]): Promise<void> => {
   if (!isDemoMode) return void (await call('excludeLotteryWinners', { entryIds }));
   let database = loadDemo();
