@@ -50,6 +50,7 @@ export interface LotteryEntry {
   updatedAt: string;
   drawnAt: string | null;
   excludedAt: string | null;
+  confirmedAt: string | null;
 }
 
 export interface LotteryAuditLog {

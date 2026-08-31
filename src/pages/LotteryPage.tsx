@@ -20,6 +20,7 @@ import { LotteryGacha } from "../components/LotteryGacha";
 import {
   cancelLotteryEntry,
   cancelWinnerByCode,
+  confirmWinnerByCode,
   ensureDeviceToken,
   getPublicLotterySnapshot,
   lookupWinnerCode,
@@ -52,6 +53,7 @@ export const LotteryPage = () => {
     () => localStorage.getItem("bar-misaki-winner-code") ?? "",
   );
   const [codeLoading, setCodeLoading] = useState(false);
+  const [confirmedNotice, setConfirmedNotice] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -123,6 +125,30 @@ export const LotteryPage = () => {
         caught instanceof Error
           ? caught.message
           : "当選の取り消しに失敗しました",
+      );
+    } finally {
+      setCodeLoading(false);
+    }
+  };
+
+  const confirmWinner = async (codeOverride = "") => {
+    const code = winnerCodeInput || codeOverride;
+    if (
+      !code ||
+      !window.confirm(
+        "WINNER CODEを確認済みにします。管理画面に確認済みとして記録します。よろしいですか？",
+      )
+    )
+      return;
+    setCodeLoading(true);
+    setError("");
+    try {
+      await confirmWinnerByCode(code);
+      setConfirmedNotice(true);
+      setSnapshot(await getPublicLotterySnapshot(token));
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "コードの確認に失敗しました",
       );
     } finally {
       setCodeLoading(false);
@@ -264,16 +290,34 @@ export const LotteryPage = () => {
                           {entry.winnerCode}
                         </strong>
                       </div>
-                      {codeSnapshot ? (
+                      <div className="flex flex-wrap justify-center gap-3">
+                        {!confirmedNotice ? (
+                          <button
+                            className="rounded-full bg-[var(--color-accent)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                            disabled={codeLoading}
+                            onClick={() =>
+                              void confirmWinner(entry.winnerCode ?? "")
+                            }
+                            type="button"
+                          >
+                            コードを確認
+                          </button>
+                        ) : (
+                          <span className="rounded-full bg-emerald-100 px-5 py-3 text-sm font-semibold text-emerald-700">
+                            確認済み
+                          </span>
+                        )}
                         <button
                           className="rounded-full border border-red-300 bg-white/60 px-5 py-3 text-sm font-semibold text-red-700 disabled:opacity-50"
                           disabled={codeLoading}
-                          onClick={() => void cancelWinner()}
+                          onClick={() =>
+                            void cancelWinner(entry.winnerCode ?? "")
+                          }
                           type="button"
                         >
                           当選を取り消す
                         </button>
-                      ) : null}
+                      </div>
                     </div>
                   ) : (
                     <div className="py-4 text-center">

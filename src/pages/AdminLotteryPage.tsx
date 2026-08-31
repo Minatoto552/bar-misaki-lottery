@@ -146,9 +146,9 @@ const EntryTable = ({
             </td>
             <td className="px-4 py-3">
               <span
-                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${entry.status === "winner" ? "bg-emerald-100 text-emerald-800" : entry.status === "excluded" ? "bg-orange-100 text-orange-800" : entry.status === "cancelled" ? "bg-red-100 text-red-800" : entry.status === "loser" ? "bg-slate-200 text-slate-700" : "bg-blue-100 text-blue-800"}`}
+                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${entry.confirmedAt ? "bg-violet-100 text-violet-800" : entry.status === "winner" ? "bg-emerald-100 text-emerald-800" : entry.status === "excluded" ? "bg-orange-100 text-orange-800" : entry.status === "cancelled" ? "bg-red-100 text-red-800" : entry.status === "loser" ? "bg-slate-200 text-slate-700" : "bg-blue-100 text-blue-800"}`}
               >
-                {statusLabels[entry.status]}
+                {entry.confirmedAt ? "確認済み" : statusLabels[entry.status]}
               </span>
             </td>
             <td className="whitespace-nowrap px-4 py-3 font-mono font-semibold">

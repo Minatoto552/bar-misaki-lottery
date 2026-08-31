@@ -80,6 +80,7 @@ const loadDemo = (): DemoDatabase => {
           entry.representativeVrcName ?? entry.representativeId,
         companionVrcName: entry.companionVrcName ?? legacy.companionId ?? null,
         normalizedIds: [normalizeXIdForComparison(entry.representativeId)],
+        confirmedAt: entry.confirmedAt ?? null,
       };
     });
     return parsed;
@@ -228,6 +229,7 @@ export const submitLotteryEntry = async (
     updatedAt: timestamp,
     drawnAt: null,
     excludedAt: null,
+    confirmedAt: null,
   };
   database.entries.push(entry);
   database.tokenEntryMap[parsed.data.token] = id;
@@ -335,6 +337,34 @@ export const cancelWinnerByCode = async (code: string): Promise<void> => {
   );
   database.settings.lastUpdatedAt = timestamp;
   database = withAudit(database, "当選取り消し", "all", entry.entryNumber);
+  saveDemo(database);
+};
+
+export const confirmWinnerByCode = async (code: string): Promise<void> => {
+  const normalized = code.trim().toUpperCase();
+  if (!normalized) throw new Error("WINNER CODEがありません");
+  if (!isDemoMode) {
+    await call("confirmWinnerByCode", { code: normalized });
+    return;
+  }
+  let database = loadDemo();
+  if (database.settings.state !== "published")
+    throw new Error("結果公開後のみ確認できます");
+  const entry = database.entries.find(
+    (candidate) =>
+      candidate.roundId === database.settings.roundId &&
+      candidate.status === "winner" &&
+      candidate.winnerCode === normalized,
+  );
+  if (!entry) throw new Error("確認できる当選者が見つかりません");
+  const timestamp = nowIso();
+  database.entries = database.entries.map((candidate) =>
+    candidate.id === entry.id
+      ? { ...candidate, confirmedAt: timestamp, updatedAt: timestamp }
+      : candidate,
+  );
+  database.settings.lastUpdatedAt = timestamp;
+  database = withAudit(database, "当選コード確認", "all", entry.entryNumber);
   saveDemo(database);
 };
 
@@ -515,6 +545,7 @@ export const runLottery = async ({
           status: winnerIds.has(entry.id) ? "winner" : "pending",
           winnerCode: winnerIds.has(entry.id) ? winnerCode(issuedCodes) : null,
           drawnAt: timestamp,
+          confirmedAt: null,
           updatedAt: timestamp,
         },
   );
@@ -626,6 +657,7 @@ export const redrawLottery = async (
               ? winnerCode(issuedCodes)
               : null,
           previousWinnerCode: null,
+          confirmedAt: null,
           drawnAt: timestamp,
           updatedAt: timestamp,
         },
