@@ -1,6 +1,18 @@
-export const lotteryKinds = ['counter', 'private', 'table'] as const;
-export const lotteryStates = ['accepting', 'drawing', 'drawn', 'published', 'closed'] as const;
-export const entryStatuses = ['pending', 'winner', 'loser', 'excluded'] as const;
+export const lotteryKinds = ["counter", "private", "table"] as const;
+export const lotteryStates = [
+  "accepting",
+  "drawing",
+  "drawn",
+  "published",
+  "closed",
+] as const;
+export const entryStatuses = [
+  "pending",
+  "winner",
+  "loser",
+  "excluded",
+  "cancelled",
+] as const;
 
 export type LotteryKind = (typeof lotteryKinds)[number];
 export type LotteryState = (typeof lotteryStates)[number];
@@ -44,7 +56,7 @@ export interface LotteryAuditLog {
   id: string;
   actor: string;
   action: string;
-  target: LotteryKind | 'all' | 'auth';
+  target: LotteryKind | "all" | "auth";
   details: string;
   createdAt: string;
 }
@@ -56,8 +68,11 @@ export interface AdminLotterySnapshot {
 }
 
 export interface PublicLotterySnapshot {
-  settings: Pick<LotterySettings, 'roundId' | 'state' | 'availableKinds' | 'drawnKinds' | 'lastUpdatedAt'>;
-  entry: Omit<LotteryEntry, 'normalizedIds' | 'previousWinnerCode'> | null;
+  settings: Pick<
+    LotterySettings,
+    "roundId" | "state" | "availableKinds" | "drawnKinds" | "lastUpdatedAt"
+  >;
+  entry: Omit<LotteryEntry, "normalizedIds" | "previousWinnerCode"> | null;
 }
 
 export interface SubmitLotteryInput {

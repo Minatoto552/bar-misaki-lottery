@@ -70,6 +70,7 @@ const statusLabels = {
   winner: "当選",
   loser: "落選",
   excluded: "除外",
+  cancelled: "当選取り消し",
 };
 
 const formatDate = (value: string | null) =>
@@ -145,7 +146,7 @@ const EntryTable = ({
             </td>
             <td className="px-4 py-3">
               <span
-                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${entry.status === "winner" ? "bg-emerald-100 text-emerald-800" : entry.status === "excluded" ? "bg-orange-100 text-orange-800" : entry.status === "loser" ? "bg-slate-200 text-slate-700" : "bg-blue-100 text-blue-800"}`}
+                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${entry.status === "winner" ? "bg-emerald-100 text-emerald-800" : entry.status === "excluded" ? "bg-orange-100 text-orange-800" : entry.status === "cancelled" ? "bg-red-100 text-red-800" : entry.status === "loser" ? "bg-slate-200 text-slate-700" : "bg-blue-100 text-blue-800"}`}
               >
                 {statusLabels[entry.status]}
               </span>
@@ -293,6 +294,7 @@ export const AdminLotteryPage = () => {
   }, [activeTab, entries, search]);
   const winners = entries.filter((entry) => entry.status === "winner");
   const excluded = entries.filter((entry) => entry.status === "excluded");
+  const cancelled = entries.filter((entry) => entry.status === "cancelled");
 
   if (!signedIn)
     return (
@@ -882,22 +884,68 @@ export const AdminLotteryPage = () => {
                     <section className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <h2 className="font-bold text-emerald-950">再抽選の当選確定枠</h2>
-                          <p className="mt-1 text-sm text-emerald-800">再抽選から除外する当選者にチェックを入れてください。チェックした応募は当選のまま固定されます。</p>
+                          <h2 className="font-bold text-emerald-950">
+                            再抽選の当選確定枠
+                          </h2>
+                          <p className="mt-1 text-sm text-emerald-800">
+                            再抽選から除外する当選者にチェックを入れてください。チェックした応募は当選のまま固定されます。
+                          </p>
                         </div>
-                        <span className="rounded-full bg-white/70 px-3 py-1.5 text-xs font-bold text-emerald-800">確定 {lockedWinners.size}組</span>
+                        <span className="rounded-full bg-white/70 px-3 py-1.5 text-xs font-bold text-emerald-800">
+                          確定 {lockedWinners.size}組
+                        </span>
                       </div>
                       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {winners.map((entry) => (
-                          <label className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm ${lockedWinners.has(entry.id) ? "border-emerald-400 bg-white" : "border-emerald-100 bg-white/50"}`} key={entry.id}>
-                            <input checked={lockedWinners.has(entry.id)} onChange={(event) => setLockedWinners((current) => { const next = new Set(current); if (event.target.checked) next.add(entry.id); else next.delete(entry.id); return next; })} type="checkbox" />
-                            <span><strong className="block">{entry.entryNumber} · {kindLabels[entry.kind]}</strong><span className="text-xs text-slate-600">{entry.representativeVrcName}</span></span>
+                          <label
+                            className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm ${lockedWinners.has(entry.id) ? "border-emerald-400 bg-white" : "border-emerald-100 bg-white/50"}`}
+                            key={entry.id}
+                          >
+                            <input
+                              checked={lockedWinners.has(entry.id)}
+                              onChange={(event) =>
+                                setLockedWinners((current) => {
+                                  const next = new Set(current);
+                                  if (event.target.checked) next.add(entry.id);
+                                  else next.delete(entry.id);
+                                  return next;
+                                })
+                              }
+                              type="checkbox"
+                            />
+                            <span>
+                              <strong className="block">
+                                {entry.entryNumber} · {kindLabels[entry.kind]}
+                              </strong>
+                              <span className="text-xs text-slate-600">
+                                {entry.representativeVrcName}
+                              </span>
+                            </span>
                           </label>
                         ))}
                       </div>
                       <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
-                        <p className="text-sm font-semibold text-indigo-900">現在の対象・当選枠を維持して再抽選します。</p>
-                        <button className="shrink-0 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" disabled={busy} onClick={() => { if (window.confirm("現在の抽選結果を破棄し、同じ条件で抽選をやり直します。よろしいですか？")) void execute(redrawLottery, "抽選をやり直しました"); }} type="button">抽選をやり直す</button>
+                        <p className="text-sm font-semibold text-indigo-900">
+                          現在の対象・当選枠を維持して再抽選します。
+                        </p>
+                        <button
+                          className="shrink-0 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+                          disabled={busy}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                "現在の抽選結果を破棄し、同じ条件で抽選をやり直します。よろしいですか？",
+                              )
+                            )
+                              void execute(
+                                redrawLottery,
+                                "抽選をやり直しました",
+                              );
+                          }}
+                          type="button"
+                        >
+                          抽選をやり直す
+                        </button>
                       </div>
                     </section>
                   ) : null}
@@ -935,6 +983,16 @@ export const AdminLotteryPage = () => {
                         }
                         selectable
                         selected={selected}
+                      />
+                    </section>
+                  ) : null}
+                  {cancelled.length ? (
+                    <section className="mt-6">
+                      <h2 className="mb-4 text-xl font-bold">当選取り消し</h2>
+                      <EntryTable
+                        entries={cancelled}
+                        onSelect={() => undefined}
+                        selected={new Set()}
                       />
                     </section>
                   ) : null}
