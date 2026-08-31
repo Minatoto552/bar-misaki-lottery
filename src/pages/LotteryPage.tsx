@@ -106,7 +106,7 @@ export const LotteryPage = () => {
   };
 
   const cancelWinner = async (codeOverride = "") => {
-    const code = winnerCodeInput || codeOverride;
+    const code = codeOverride || winnerCodeInput;
     if (
       !code ||
       !window.confirm(
@@ -132,7 +132,7 @@ export const LotteryPage = () => {
   };
 
   const confirmWinner = async (codeOverride = "") => {
-    const code = winnerCodeInput || codeOverride;
+    const code = codeOverride || winnerCodeInput;
     if (
       !code ||
       !window.confirm(
