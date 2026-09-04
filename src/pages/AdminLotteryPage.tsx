@@ -3,7 +3,6 @@ import {
   Armchair,
   BarChart3,
   DoorOpen,
-  LayoutDashboard,
   LogOut,
   RefreshCw,
   Search,
@@ -18,6 +17,8 @@ import type {
   LotteryEntry,
   LotteryKind,
 } from "../../shared/models";
+import { Toast } from "../components/Feedback";
+import { useConfirmation } from "../components/useConfirmation";
 import { BrandMark } from "../components/Brand";
 import {
   excludeWinners,
@@ -36,11 +37,12 @@ import {
 
 const tabs = [
   "dashboard",
-  "recruitment",
   "counter",
   "private",
   "table",
+  "draw",
   "results",
+  "recruitment",
   "history",
 ] as const;
 type Tab = (typeof tabs)[number];
@@ -50,7 +52,8 @@ const tabLabels = {
   counter: "カウンター",
   private: "個室",
   table: "テーブル席",
-  results: "抽選結果",
+  draw: "抽選実行",
+  results: "当選者・結果公開",
   history: "操作履歴",
 };
 const kindLabels: Record<LotteryKind, string> = {
@@ -146,9 +149,11 @@ const EntryTable = ({
             </td>
             <td className="px-4 py-3">
               <span
-                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${entry.confirmedAt ? "bg-violet-100 text-violet-800" : entry.status === "winner" ? "bg-emerald-100 text-emerald-800" : entry.status === "excluded" ? "bg-orange-100 text-orange-800" : entry.status === "cancelled" ? "bg-red-100 text-red-800" : entry.status === "loser" ? "bg-slate-200 text-slate-700" : "bg-blue-100 text-blue-800"}`}
+                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${entry.status === "winner" && entry.confirmedAt ? "bg-violet-100 text-violet-800" : entry.status === "winner" ? "bg-emerald-100 text-emerald-800" : entry.status === "excluded" ? "bg-orange-100 text-orange-800" : entry.status === "cancelled" ? "bg-red-100 text-red-800" : entry.status === "loser" ? "bg-slate-200 text-slate-700" : "bg-blue-100 text-blue-800"}`}
               >
-                {entry.confirmedAt ? "確認済み" : statusLabels[entry.status]}
+                {entry.status === "winner" && entry.confirmedAt
+                  ? "確認済み"
+                  : statusLabels[entry.status]}
               </span>
             </td>
             <td className="whitespace-nowrap px-4 py-3 font-mono font-semibold">
@@ -187,7 +192,7 @@ export const AdminLotteryPage = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [resetText, setResetText] = useState("");
+  const { confirm, confirmation } = useConfirmation();
 
   const refresh = useCallback(async () => {
     if (!signedIn) return;
@@ -295,6 +300,8 @@ export const AdminLotteryPage = () => {
   const winners = entries.filter((entry) => entry.status === "winner");
   const excluded = entries.filter((entry) => entry.status === "excluded");
   const cancelled = entries.filter((entry) => entry.status === "cancelled");
+  const selectedWinners = winners.filter((entry) => selected.has(entry.id));
+  const selectedExcluded = excluded.filter((entry) => selected.has(entry.id));
 
   if (!signedIn)
     return (
@@ -353,54 +360,70 @@ export const AdminLotteryPage = () => {
     );
 
   return (
-    <main className="min-h-screen bg-[#eef0f3] text-slate-900">
-      <header className="border-b border-slate-700 bg-slate-950 text-white">
-        <div className="mx-auto flex max-w-[1500px] items-center justify-between px-5 py-4">
-          <div className="flex items-center gap-3">
-            <Link
-              aria-label="管理ダッシュボードに戻る"
-              className="rounded-full bg-white ring-2 ring-violet-400 ring-offset-2 ring-offset-slate-950 transition-transform hover:scale-105"
+    <main className="admin-shell">
+      <aside className="admin-sidebar">
+        <Link
+          className="admin-brand"
+          to="/admin"
+          onClick={() => setActiveTab("dashboard")}
+          aria-label="抽選運用ダッシュボード"
+        >
+          <BrandMark size="sm" />
+          <span>
+            BAR MISAKI<small>STAFF CONSOLE</small>
+          </span>
+        </Link>
+        <p className="eyebrow">WORKSPACE</p>
+        <nav aria-label="管理メニュー">
+          {tabs.map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              aria-current={activeTab === tab ? "page" : undefined}
               onClick={() => {
-                setActiveTab("dashboard");
+                setActiveTab(tab);
                 setSelected(new Set());
-                window.scrollTo({ top: 0, behavior: "smooth" });
+                setSearch("");
               }}
-              to="/admin"
             >
-              <BrandMark size="sm" />
-            </Link>
-            <div>
-              <strong className="block">Bar Misaki 抽選管理</strong>
-              <span className="text-xs text-slate-400">STAFF CONSOLE</span>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button
-              aria-label="更新"
-              className="rounded-xl border border-slate-700 p-2.5 hover:bg-slate-800"
-              onClick={() => void refresh()}
-              type="button"
-            >
-              <RefreshCw size={19} />
+              <span>{tabLabels[tab]}</span>
+              {(["counter", "private", "table"] as string[]).includes(tab) && (
+                <small>{counts[tab as LotteryKind].groups}</small>
+              )}
             </button>
-            <button
-              className="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800"
-              onClick={() => void logoutAdmin().then(() => setSignedIn(false))}
-              type="button"
-            >
-              <LogOut size={17} />
-              ログアウト
-            </button>
-          </div>
+          ))}
+        </nav>
+        <button
+          className="admin-logout"
+          onClick={() => void logoutAdmin().then(() => setSignedIn(false))}
+        >
+          <LogOut size={16} />
+          ログアウト
+        </button>
+      </aside>
+      <div className="admin-workspace">
+        <div className="admin-location">
+          <span>
+            ワークスペース <span aria-hidden="true">/</span>{" "}
+            {tabLabels[activeTab]}
+          </span>
+          <button
+            className="button-secondary"
+            aria-label="最新のデータに更新"
+            disabled={busy}
+            onClick={() => void refresh()}
+          >
+            <RefreshCw size={16} />
+            更新
+          </button>
         </div>
-      </header>
-      <div className="mx-auto max-w-[1500px] p-5 sm:p-7">
+
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-xs font-bold tracking-[0.16em] text-violet-600">
               LOTTERY OVERVIEW
             </p>
-            <h1 className="mt-1 text-3xl font-bold">抽選運用ダッシュボード</h1>
+            <h1 className="mt-1 text-2xl font-bold">{tabLabels[activeTab]}</h1>
           </div>
           {snapshot ? (
             <div className="text-right text-sm">
@@ -432,7 +455,7 @@ export const AdminLotteryPage = () => {
           </div>
         ) : (
           <>
-            <section className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <section className="admin-kpis">
               <div className="rounded-2xl bg-white p-5">
                 <Users className="text-violet-600" />
                 <span className="mt-4 block text-sm text-slate-500">
@@ -483,132 +506,69 @@ export const AdminLotteryPage = () => {
               </div>
             </section>
             <section className="rounded-2xl bg-white p-4 sm:p-6">
-              <div
-                className="mb-6 flex flex-wrap gap-2 border-b border-slate-200 pb-4"
-                role="tablist"
-              >
-                {tabs.map((tab) => (
-                  <button
-                    aria-selected={activeTab === tab}
-                    className={`rounded-xl px-4 py-2.5 text-sm font-semibold ${activeTab === tab ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-                    key={tab}
-                    onClick={() => {
-                      setActiveTab(tab);
-                      setSelected(new Set());
-                    }}
-                    role="tab"
-                    type="button"
-                  >
-                    {tabLabels[tab]}
-                  </button>
-                ))}
-              </div>
               {activeTab === "dashboard" ? (
-                <div className="grid gap-6 xl:grid-cols-[1.25fr_0.75fr]">
+                <div className="overview-grid">
                   <section>
-                    <div className="flex items-center gap-3">
-                      <span className="grid size-11 place-items-center rounded-2xl bg-slate-900 text-white">
-                        <LayoutDashboard size={22} />
-                      </span>
-                      <div>
-                        <p className="text-xs font-bold tracking-[0.15em] text-violet-600">
-                          STAFF HOME
-                        </p>
-                        <h2 className="text-xl font-bold">
-                          抽選運用ダッシュボード
-                        </h2>
-                      </div>
+                    <div className="section-heading">
+                      <h2>最近の応募</h2>
+                      <span>{entries.length}組</span>
                     </div>
-                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                    <EntryTable
+                      entries={[...entries]
+                        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+                        .slice(0, 5)}
+                      selected={new Set()}
+                      onSelect={() => undefined}
+                    />
+                    <div className="overview-shortcuts">
                       <button
-                        className="rounded-2xl border border-violet-200 bg-violet-50 p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"
-                        onClick={() => setActiveTab("counter")}
-                        type="button"
+                        className="button-secondary"
+                        onClick={() => setActiveTab("recruitment")}
                       >
-                        <span className="text-sm font-bold text-violet-700">
-                          応募者を確認
-                        </span>
-                        <strong className="mt-2 block text-xl">
-                          カウンター {counts.counter.groups}組
-                        </strong>
-                        <span className="mt-1 block text-sm text-slate-500">
-                          応募一覧・X ID検索
-                        </span>
+                        募集項目を設定
                       </button>
                       <button
-                        className="rounded-2xl border border-blue-200 bg-blue-50 p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"
-                        onClick={() => setActiveTab("private")}
-                        type="button"
+                        className="button-primary"
+                        onClick={() =>
+                          setActiveTab(
+                            snapshot.settings.state === "accepting"
+                              ? "draw"
+                              : "results",
+                          )
+                        }
                       >
-                        <span className="text-sm font-bold text-blue-700">
-                          応募者を確認
-                        </span>
-                        <strong className="mt-2 block text-xl">
-                          個室 {counts.private.groups}組
-                        </strong>
-                        <span className="mt-1 block text-sm text-slate-500">
-                          応募一覧・X ID検索
-                        </span>
-                      </button>
-                      <button
-                        className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"
-                        onClick={() => setActiveTab("results")}
-                        type="button"
-                      >
-                        <span className="text-sm font-bold text-emerald-700">
-                          抽選を運用
-                        </span>
-                        <strong className="mt-2 block text-xl">
-                          抽選・公開・再抽選
-                        </strong>
-                        <span className="mt-1 block text-sm text-slate-500">
-                          現在 {stateLabels[snapshot.settings.state]}
-                        </span>
-                      </button>
-                      <button
-                        className="rounded-2xl border border-orange-200 bg-orange-50 p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"
-                        onClick={() => setActiveTab("history")}
-                        type="button"
-                      >
-                        <span className="text-sm font-bold text-orange-700">
-                          監査ログ
-                        </span>
-                        <strong className="mt-2 block text-xl">
-                          操作履歴を確認
-                        </strong>
-                        <span className="mt-1 block text-sm text-slate-500">
-                          全 {snapshot.audits.length}件
-                        </span>
+                        {snapshot.settings.state === "accepting"
+                          ? "抽選へ進む"
+                          : "結果を管理"}
                       </button>
                     </div>
                   </section>
-                  <aside className="rounded-2xl bg-slate-950 p-5 text-white">
-                    <p className="text-xs font-bold tracking-[0.15em] text-violet-300">
-                      CURRENT OPERATION
-                    </p>
-                    <h3 className="mt-2 text-lg font-bold">現在の運用状況</h3>
-                    <dl className="mt-5 space-y-4 text-sm">
-                      <div className="flex items-center justify-between border-b border-slate-700 pb-3">
-                        <dt className="text-slate-400">ステータス</dt>
-                        <dd className="font-semibold text-violet-200">
-                          {stateLabels[snapshot.settings.state]}
+                  <aside className="operation-summary">
+                    <p className="eyebrow">CURRENT OPERATION</p>
+                    <h2>運用状況</h2>
+                    <dl>
+                      <div>
+                        <dt>現在の状態</dt>
+                        <dd>{stateLabels[snapshot.settings.state]}</dd>
+                      </div>
+                      <div>
+                        <dt>募集項目</dt>
+                        <dd>
+                          {snapshot.settings.availableKinds
+                            .map((item) => kindLabels[item])
+                            .join("・")}
                         </dd>
                       </div>
-                      <div className="flex items-center justify-between border-b border-slate-700 pb-3">
-                        <dt className="text-slate-400">ラウンドID</dt>
-                        <dd className="font-mono">
-                          {snapshot.settings.roundId}
+                      <div>
+                        <dt>確認済み</dt>
+                        <dd>
+                          {winners.filter((entry) => entry.confirmedAt).length}{" "}
+                          / {winners.length}組
                         </dd>
                       </div>
-                      <div className="flex items-center justify-between border-b border-slate-700 pb-3">
-                        <dt className="text-slate-400">当選組数</dt>
-                        <dd className="font-semibold">{winners.length}組</dd>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <dt className="text-slate-400">結果公開日時</dt>
-                        <dd className="text-right font-semibold">
-                          {formatDate(snapshot.settings.publishedAt)}
-                        </dd>
+                      <div>
+                        <dt>公開日時</dt>
+                        <dd>{formatDate(snapshot.settings.publishedAt)}</dd>
                       </div>
                     </dl>
                   </aside>
@@ -644,7 +604,7 @@ export const AdminLotteryPage = () => {
                           aria-pressed={active}
                           className={`rounded-2xl border p-5 text-left transition ${active ? "border-violet-500 bg-violet-50 text-violet-950 shadow-sm" : "border-slate-200 bg-slate-50 text-slate-400"}`}
                           key={item}
-                          onClick={() => {
+                          onClick={async () => {
                             setAvailableKinds((current) => {
                               const next = new Set(current);
                               if (next.has(item)) next.delete(item);
@@ -724,365 +684,393 @@ export const AdminLotteryPage = () => {
                   />
                 </div>
               ) : null}
-              {activeTab === "results" ? (
+              {activeTab === "results" || activeTab === "draw" ? (
                 <div className="space-y-8">
-                  <section>
-                    <h2 className="text-xl font-bold">抽選対象と当選枠</h2>
-                    <p className="mt-2 text-sm text-slate-500">
-                      今回抽選する席だけを選択してください。未選択の席種は応募を保持したまま抽選対象から除外されます。
-                    </p>
-                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                      {(["counter", "private", "table"] as const).map(
-                        (item) => {
-                          const active = enabledKinds.has(item);
-                          return (
-                            <button
-                              aria-pressed={active}
-                              className={`rounded-2xl border p-4 text-left transition ${active ? "border-blue-600 bg-blue-50 text-blue-900" : "border-slate-200 bg-slate-50 text-slate-400"}`}
-                              key={item}
-                              onClick={() =>
-                                setEnabledKinds((current) => {
-                                  const next = new Set(current);
-                                  if (next.has(item)) next.delete(item);
-                                  else next.add(item);
-                                  return next;
-                                })
-                              }
-                              type="button"
-                            >
-                              <span className="text-xs font-bold tracking-wider">
-                                {active ? "抽選対象" : "対象外"}
-                              </span>
-                              <strong className="mt-1 block">
-                                {kindLabels[item]}
-                              </strong>
-                            </button>
-                          );
-                        },
-                      )}
-                    </div>
-                    <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                      <label className="text-sm font-semibold">
-                        カウンター当選組数
-                        <input
-                          className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 disabled:bg-slate-100 disabled:text-slate-400"
-                          disabled={!enabledKinds.has("counter")}
-                          max={counts.counter.groups}
-                          min={0}
-                          onChange={(event) =>
-                            setCounterSlots(Number(event.target.value))
-                          }
-                          type="number"
-                          value={counterSlots}
-                        />
-                      </label>
-                      <label className="text-sm font-semibold">
-                        個室当選組数
-                        <input
-                          className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 disabled:bg-slate-100 disabled:text-slate-400"
-                          disabled={!enabledKinds.has("private")}
-                          max={counts.private.groups}
-                          min={0}
-                          onChange={(event) =>
-                            setPrivateSlots(Number(event.target.value))
-                          }
-                          type="number"
-                          value={privateSlots}
-                        />
-                      </label>
-                      <label className="text-sm font-semibold">
-                        テーブル席当選組数
-                        <input
-                          className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 disabled:bg-slate-100 disabled:text-slate-400"
-                          disabled={!enabledKinds.has("table")}
-                          max={counts.table.groups}
-                          min={0}
-                          onChange={(event) =>
-                            setTableSlots(Number(event.target.value))
-                          }
-                          type="number"
-                          value={tableSlots}
-                        />
-                      </label>
-                    </div>
-                    <button
-                      className="mt-4 rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white disabled:opacity-40"
-                      disabled={
-                        busy ||
-                        !enabledKinds.size ||
-                        !["accepting", "closed"].includes(
-                          snapshot.settings.state,
-                        )
-                      }
-                      onClick={() => {
-                        const summary = [...enabledKinds]
-                          .map(
-                            (item) =>
-                              `${kindLabels[item]}${item === "counter" ? counterSlots : item === "private" ? privateSlots : tableSlots}組`,
-                          )
-                          .join("、");
-                        if (
-                          window.confirm(
-                            `${summary}を抽選します。よろしいですか？`,
-                          )
-                        )
-                          void execute(
-                            () =>
-                              runLottery({
-                                enabledKinds: [...enabledKinds],
-                                winnerSlots: {
-                                  counter: counterSlots,
-                                  private: privateSlots,
-                                  table: tableSlots,
-                                },
-                              }),
-                            "抽選が完了しました",
-                          );
-                      }}
-                      type="button"
-                    >
-                      選択した内容で抽選開始
-                    </button>
-                  </section>
-                  <section>
-                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                      <h2 className="text-xl font-bold">当選者一覧</h2>
-                      <button
-                        className="rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
-                        disabled={busy || !selected.size}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `選択した${selected.size}組を当選から除外しますか？`,
-                            )
-                          )
-                            void execute(
-                              () => excludeWinners([...selected]),
-                              "当選者を除外しました",
-                            );
-                        }}
-                        type="button"
-                      >
-                        選択した当選者を除外
-                      </button>
-                    </div>
-                    <EntryTable
-                      entries={winners}
-                      onSelect={(id, checked) =>
-                        setSelected((current) => {
-                          const next = new Set(current);
-                          if (checked) next.add(id);
-                          else next.delete(id);
-                          return next;
-                        })
-                      }
-                      selectable
-                      selected={selected}
-                    />
-                  </section>
-                  {snapshot.settings.state === "drawn" && winners.length ? (
-                    <section className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h2 className="font-bold text-emerald-950">
-                            再抽選の当選確定枠
-                          </h2>
-                          <p className="mt-1 text-sm text-emerald-800">
-                            再抽選から除外する当選者にチェックを入れてください。チェックした応募は当選のまま固定されます。
-                          </p>
-                        </div>
-                        <span className="rounded-full bg-white/70 px-3 py-1.5 text-xs font-bold text-emerald-800">
-                          確定 {lockedWinners.size}組
-                        </span>
-                      </div>
-                      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {winners.map((entry) => (
-                          <label
-                            className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm ${lockedWinners.has(entry.id) ? "border-emerald-400 bg-white" : "border-emerald-100 bg-white/50"}`}
-                            key={entry.id}
-                          >
-                            <input
-                              checked={lockedWinners.has(entry.id)}
-                              onChange={(event) =>
-                                setLockedWinners((current) => {
-                                  const next = new Set(current);
-                                  if (event.target.checked) next.add(entry.id);
-                                  else next.delete(entry.id);
-                                  return next;
-                                })
-                              }
-                              type="checkbox"
-                            />
-                            <span>
-                              <strong className="block">
-                                {entry.entryNumber} · {kindLabels[entry.kind]}
-                              </strong>
-                              <span className="text-xs text-slate-600">
-                                {entry.representativeVrcName}
-                              </span>
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                      <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
-                        <p className="text-sm font-semibold text-indigo-900">
-                          現在の対象・当選枠を維持して再抽選します。
-                        </p>
-                        <button
-                          className="shrink-0 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
-                          disabled={busy}
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                "現在の抽選結果を破棄し、同じ条件で抽選をやり直します。よろしいですか？",
-                              )
-                            )
-                              void execute(
-                                redrawLottery,
-                                "抽選をやり直しました",
-                              );
-                          }}
-                          type="button"
-                        >
-                          抽選をやり直す
-                        </button>
-                      </div>
-                    </section>
-                  ) : null}
-                  {excluded.length ? (
+                  {activeTab === "draw" && (
                     <section>
-                      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                        <h2 className="text-xl font-bold">除外した応募</h2>
-                        <button
-                          className="rounded-xl border border-orange-400 px-4 py-2.5 text-sm font-semibold text-orange-700 disabled:opacity-40"
-                          disabled={
-                            busy ||
-                            !selected.size ||
-                            snapshot.settings.state === "published"
-                          }
-                          onClick={() =>
-                            void execute(
-                              () => undoExclusions([...selected]),
-                              "除外を取り消しました",
-                            )
-                          }
-                          type="button"
-                        >
-                          選択した除外を取り消す
-                        </button>
-                      </div>
-                      <EntryTable
-                        entries={excluded}
-                        onSelect={(id, checked) =>
-                          setSelected((current) => {
-                            const next = new Set(current);
-                            if (checked) next.add(id);
-                            else next.delete(id);
-                            return next;
-                          })
-                        }
-                        selectable
-                        selected={selected}
-                      />
-                    </section>
-                  ) : null}
-                  {cancelled.length ? (
-                    <section className="mt-6">
-                      <h2 className="mb-4 text-xl font-bold">当選取り消し</h2>
-                      <EntryTable
-                        entries={cancelled}
-                        onSelect={() => undefined}
-                        selected={new Set()}
-                      />
-                    </section>
-                  ) : null}
-                  <section className="grid gap-4 border-t border-slate-200 pt-6 lg:grid-cols-3">
-                    <div className="rounded-2xl bg-blue-50 p-5">
-                      <h3 className="font-bold">空き枠を再抽選</h3>
-                      <p className="mt-2 text-sm text-slate-600">
-                        カウンター {snapshot.settings.vacantCounterSlots}組 /
-                        個室 {snapshot.settings.vacantPrivateSlots}組 /
-                        テーブル席 {snapshot.settings.vacantTableSlots}組
+                      <h2 className="text-xl font-bold">抽選対象と当選枠</h2>
+                      <p className="mt-2 text-sm text-slate-500">
+                        今回抽選する席だけを選択してください。未選択の席種は応募を保持したまま抽選対象から除外されます。
                       </p>
+                      <div className="draw-controls">
+                        <div className="draw-row draw-head">
+                          <span>抽選対象</span>
+                          <span>応募数</span>
+                          <span>当選組数</span>
+                        </div>
+                        {(["counter", "private", "table"] as const).map(
+                          (item) => (
+                            <div className="draw-row" key={item}>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={enabledKinds.has(item)}
+                                  disabled={
+                                    busy ||
+                                    !["accepting", "closed"].includes(
+                                      snapshot.settings.state,
+                                    )
+                                  }
+                                  onChange={(event) =>
+                                    setEnabledKinds((current) => {
+                                      const next = new Set(current);
+                                      if (event.target.checked) next.add(item);
+                                      else next.delete(item);
+                                      return next;
+                                    })
+                                  }
+                                />
+                                {kindLabels[item]}
+                              </label>
+                              <span>{counts[item].groups}組</span>
+                              <input
+                                aria-label={kindLabels[item] + "当選組数"}
+                                type="number"
+                                min={0}
+                                max={counts[item].groups}
+                                disabled={
+                                  !enabledKinds.has(item) ||
+                                  busy ||
+                                  !["accepting", "closed"].includes(
+                                    snapshot.settings.state,
+                                  )
+                                }
+                                value={
+                                  item === "counter"
+                                    ? counterSlots
+                                    : item === "private"
+                                      ? privateSlots
+                                      : tableSlots
+                                }
+                                onChange={(event) =>
+                                  (item === "counter"
+                                    ? setCounterSlots
+                                    : item === "private"
+                                      ? setPrivateSlots
+                                      : setTableSlots)(
+                                    Number(event.target.value),
+                                  )
+                                }
+                              />
+                            </div>
+                          ),
+                        )}
+                      </div>
                       <button
-                        className="mt-4 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+                        className="button-primary mt-4 disabled:opacity-40"
                         disabled={
                           busy ||
-                          !(
-                            snapshot.settings.vacantCounterSlots +
-                            snapshot.settings.vacantPrivateSlots +
-                            snapshot.settings.vacantTableSlots
+                          !enabledKinds.size ||
+                          !["accepting", "closed"].includes(
+                            snapshot.settings.state,
                           )
                         }
-                        onClick={() =>
-                          void execute(
-                            redrawVacancies,
-                            "空き枠を再抽選しました",
-                          )
-                        }
-                        type="button"
-                      >
-                        空き枠を再抽選
-                      </button>
-                    </div>
-                    <div className="rounded-2xl bg-emerald-50 p-5">
-                      <h3 className="font-bold">結果を公開</h3>
-                      <p className="mt-2 text-sm text-slate-600">
-                        公開後、お客様はキャストコインを選び、ガチャで確定済みの結果を開封します。
-                      </p>
-                      <button
-                        className="mt-4 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
-                        disabled={busy || snapshot.settings.state !== "drawn"}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              "抽選結果を公開します。お客様はコインガチャで確定済みの結果を開封します。よろしいですか？",
+                        onClick={async () => {
+                          const summary = [...enabledKinds]
+                            .map(
+                              (item) =>
+                                `${kindLabels[item]}${item === "counter" ? counterSlots : item === "private" ? privateSlots : tableSlots}組`,
                             )
-                          )
-                            void execute(
-                              publishLotteryResults,
-                              "結果を公開しました",
-                            );
-                        }}
-                        type="button"
-                      >
-                        抽選結果を公開
-                      </button>
-                    </div>
-                    <div className="rounded-2xl bg-red-50 p-5">
-                      <h3 className="font-bold text-red-800">抽選をリセット</h3>
-                      <p className="mt-2 text-sm text-red-700">
-                        応募・結果・コードを無効化します。履歴は残ります。
-                      </p>
-                      <input
-                        className="mt-4 w-full rounded-xl border border-red-200 px-3 py-2.5 text-sm"
-                        onChange={(event) => setResetText(event.target.value)}
-                        placeholder="リセット と入力"
-                        value={resetText}
-                      />
-                      <button
-                        className="mt-3 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
-                        disabled={busy || resetText !== "リセット"}
-                        onClick={() => {
+                            .join("、");
                           if (
-                            window.confirm(
-                              "すべての応募情報と抽選結果をリセットします。最終確認です。",
+                            await confirm(
+                              `${summary}を抽選します。よろしいですか？`,
                             )
                           )
                             void execute(
                               () =>
-                                resetLottery(resetText).then(() =>
-                                  setResetText(""),
-                                ),
-                              "抽選をリセットしました",
+                                runLottery({
+                                  enabledKinds: [...enabledKinds],
+                                  winnerSlots: {
+                                    counter: counterSlots,
+                                    private: privateSlots,
+                                    table: tableSlots,
+                                  },
+                                }),
+                              "抽選が完了しました。結果画面で確認してください",
                             );
                         }}
                         type="button"
                       >
-                        抽選をリセット
+                        選択した内容で抽選開始
                       </button>
-                    </div>
-                  </section>
+                    </section>
+                  )}
+                  {activeTab === "results" && (
+                    <>
+                      <section>
+                        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                          <h2 className="text-xl font-bold">当選者一覧</h2>
+                          <button
+                            className="rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+                            hidden={!selectedWinners.length}
+                            disabled={busy || !selectedWinners.length}
+                            onClick={async () => {
+                              if (
+                                await confirm({
+                                  title: "選択した当選者を除外しますか？",
+                                  description: `${selectedWinners.length}組を当選から除外します。`,
+                                  label: "当選から除外",
+                                  danger: true,
+                                })
+                              )
+                                void execute(
+                                  () =>
+                                    excludeWinners(
+                                      selectedWinners.map((entry) => entry.id),
+                                    ),
+                                  "当選者を除外しました",
+                                );
+                            }}
+                            type="button"
+                          >
+                            {selectedWinners.length}組を除外
+                          </button>
+                        </div>
+                        <EntryTable
+                          entries={winners}
+                          onSelect={(id, checked) =>
+                            setSelected((current) => {
+                              const next = new Set(current);
+                              if (checked) next.add(id);
+                              else next.delete(id);
+                              return next;
+                            })
+                          }
+                          selectable
+                          selected={selected}
+                        />
+                      </section>
+                      {snapshot.settings.state === "drawn" ? (
+                        <section className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <h2 className="font-bold text-emerald-950">
+                                再抽選の当選確定枠
+                              </h2>
+                              <p className="mt-1 text-sm text-emerald-800">
+                                再抽選から除外する当選者にチェックを入れてください。チェックした応募は当選のまま固定されます。
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-white/70 px-3 py-1.5 text-xs font-bold text-emerald-800">
+                              確定 {lockedWinners.size}組
+                            </span>
+                          </div>
+                          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-2">
+                            {winners.map((entry) => (
+                              <label
+                                className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm ${lockedWinners.has(entry.id) ? "border-emerald-400 bg-white" : "border-emerald-100 bg-white/50"}`}
+                                key={entry.id}
+                              >
+                                <input
+                                  checked={lockedWinners.has(entry.id)}
+                                  onChange={(event) =>
+                                    setLockedWinners((current) => {
+                                      const next = new Set(current);
+                                      if (event.target.checked)
+                                        next.add(entry.id);
+                                      else next.delete(entry.id);
+                                      return next;
+                                    })
+                                  }
+                                  type="checkbox"
+                                />
+                                <span>
+                                  <strong className="block">
+                                    {entry.entryNumber} ·{" "}
+                                    {kindLabels[entry.kind]}
+                                  </strong>
+                                  <span className="text-xs text-slate-600">
+                                    {entry.representativeVrcName}
+                                  </span>
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                          <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+                            <p className="text-sm font-semibold text-indigo-900">
+                              現在の対象・当選枠を維持して再抽選します。
+                            </p>
+                            <button
+                              className="shrink-0 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+                              disabled={busy}
+                              onClick={async () => {
+                                if (
+                                  await confirm(
+                                    "現在の抽選結果を破棄し、同じ条件で抽選をやり直します。よろしいですか？",
+                                  )
+                                )
+                                  void execute(
+                                    () => redrawLottery([...lockedWinners]),
+                                    "抽選をやり直しました",
+                                  );
+                              }}
+                              type="button"
+                            >
+                              抽選をやり直す
+                            </button>
+                          </div>
+                        </section>
+                      ) : null}
+                      {excluded.length ? (
+                        <section>
+                          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                            <h2 className="text-xl font-bold">除外した応募</h2>
+                            <button
+                              className="rounded-xl border border-orange-400 px-4 py-2.5 text-sm font-semibold text-orange-700 disabled:opacity-40"
+                              disabled={
+                                busy ||
+                                !selectedExcluded.length ||
+                                snapshot.settings.state === "published"
+                              }
+                              hidden={!selectedExcluded.length}
+                              onClick={async () => {
+                                if (
+                                  await confirm({
+                                    title: "除外を取り消しますか？",
+                                    description: `${selectedExcluded.length}組を当選に戻します。`,
+                                    label: "当選に戻す",
+                                  })
+                                )
+                                  void execute(
+                                    () =>
+                                      undoExclusions(
+                                        selectedExcluded.map(
+                                          (entry) => entry.id,
+                                        ),
+                                      ),
+                                    "除外を取り消しました",
+                                  );
+                              }}
+                              type="button"
+                            >
+                              選択した除外を取り消す
+                            </button>
+                          </div>
+                          <EntryTable
+                            entries={excluded}
+                            onSelect={(id, checked) =>
+                              setSelected((current) => {
+                                const next = new Set(current);
+                                if (checked) next.add(id);
+                                else next.delete(id);
+                                return next;
+                              })
+                            }
+                            selectable
+                            selected={selected}
+                          />
+                        </section>
+                      ) : null}
+                      {cancelled.length ? (
+                        <section className="mt-6">
+                          <h2 className="mb-4 text-xl font-bold">
+                            当選取り消し
+                          </h2>
+                          <EntryTable
+                            entries={cancelled}
+                            onSelect={() => undefined}
+                            selected={new Set()}
+                          />
+                        </section>
+                      ) : null}
+                      <section className="grid gap-4 border-t border-slate-200 pt-6 lg:grid-cols-3">
+                        <div className="operation-action">
+                          <h3 className="font-bold">空き枠を再抽選</h3>
+                          <p className="mt-2 text-sm text-slate-600">
+                            カウンター {snapshot.settings.vacantCounterSlots}組
+                            / 個室 {snapshot.settings.vacantPrivateSlots}組 /
+                            テーブル席 {snapshot.settings.vacantTableSlots}組
+                          </p>
+                          <button
+                            className="button-secondary mt-4 disabled:opacity-40"
+                            disabled={
+                              busy ||
+                              !(
+                                snapshot.settings.vacantCounterSlots +
+                                snapshot.settings.vacantPrivateSlots +
+                                snapshot.settings.vacantTableSlots
+                              )
+                            }
+                            onClick={async () => {
+                              if (
+                                await confirm({
+                                  title: "空き枠を再抽選しますか？",
+                                  description:
+                                    "既存の当選者は維持し、空き枠の対象者を抽選します。",
+                                  label: "再抽選する",
+                                })
+                              )
+                                void execute(
+                                  redrawVacancies,
+                                  "空き枠を再抽選しました",
+                                );
+                            }}
+                            type="button"
+                          >
+                            空き枠を再抽選
+                          </button>
+                        </div>
+                        <div className="operation-action publish-action">
+                          <h3 className="font-bold">結果を公開</h3>
+                          <p className="mt-2 text-sm text-slate-600">
+                            公開後、お客様はキャストコインを選び、ガチャで確定済みの結果を開封します。
+                          </p>
+                          <button
+                            className="button-primary mt-4 disabled:opacity-40"
+                            disabled={
+                              busy || snapshot.settings.state !== "drawn"
+                            }
+                            onClick={async () => {
+                              if (
+                                await confirm(
+                                  "抽選結果を公開します。お客様はコインガチャで確定済みの結果を開封します。よろしいですか？",
+                                )
+                              )
+                                void execute(
+                                  publishLotteryResults,
+                                  "結果を公開しました",
+                                );
+                            }}
+                            type="button"
+                          >
+                            抽選結果を公開
+                          </button>
+                        </div>
+                      </section>
+                      <section className="danger-zone">
+                        <div>
+                          <p className="eyebrow">DANGER ZONE</p>
+                          <h3>抽選をリセット</h3>
+                          <p>
+                            すべての応募・結果・コードを無効化します。操作履歴は残ります。
+                          </p>
+                        </div>
+                        <button
+                          className="button-secondary"
+                          disabled={busy}
+                          onClick={async () => {
+                            if (
+                              await confirm({
+                                title: "抽選をリセットしますか？",
+                                description:
+                                  "すべての応募情報・抽選結果・当選コードが無効になります。この操作は取り消せません。",
+                                label: "リセットを実行",
+                                danger: true,
+                                keyword: "リセット",
+                              })
+                            )
+                              void execute(
+                                () => resetLottery("リセット"),
+                                "抽選をリセットしました",
+                              );
+                          }}
+                        >
+                          抽選をリセット
+                        </button>
+                      </section>
+                    </>
+                  )}
                 </div>
               ) : null}
               {activeTab === "history" ? (
@@ -1115,6 +1103,8 @@ export const AdminLotteryPage = () => {
           </>
         )}
       </div>
+      {confirmation}
+      <Toast message={error || message} error={Boolean(error)} />
     </main>
   );
 };

@@ -3,7 +3,7 @@
 
 :root {
   --font-heading: 'Helvetica Now Display Bold', sans-serif;
-  --font-body: 'Inter', sans-serif;
+  --font-body: 'Inter', 'Noto Sans JP', system-ui, sans-serif;
   --color-text: #192837;
   --color-accent: #7342e2;
   --color-login-bg: #f2f2ee;
@@ -67,8 +67,7 @@ a:focus-visible {
   width: 100%;
   height: 100%;
   transform-style: preserve-3d;
-  animation: gallery-coin-turn 10s cubic-bezier(0.45, 0, 0.2, 1) var(--coin-delay) infinite;
-  will-change: transform;
+  transition: transform 0.3s ease;
 }
 
 .gallery-coin__face {
