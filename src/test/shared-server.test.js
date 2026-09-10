@@ -41,4 +41,15 @@ describe('shared Sites backend', () => {
     expect(secondDevice.body.entry).toBeNull();
     expect(secondDevice.body.settings.state).toBe('accepting');
   });
+
+  it('preserves recruitment categories when resetting a round', async () => {
+    const env = { DB: new MemoryD1(), ADMIN_SHARED_PASSWORD: '3331' };
+    const login = await post(env, 'adminLogin', { password: '3331' });
+    const session = login.body.sessionToken;
+    expect((await post(env, 'updateAvailableLotteryKinds', { availableKinds: ['private', 'table'] }, session)).status).toBe(200);
+    expect((await post(env, 'resetLottery', { confirmation: 'リセット' }, session)).status).toBe(200);
+    const admin = await post(env, 'getAdminLottery', {}, session);
+    expect(admin.body.settings.availableKinds).toEqual(['private', 'table']);
+    expect(admin.body.entries).toHaveLength(0);
+  });
 });

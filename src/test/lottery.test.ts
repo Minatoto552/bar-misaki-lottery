@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cancelLotteryEntry, ensureDeviceToken, getAdminLotterySnapshot, getPublicLotterySnapshot, loginAdmin, publishLotteryResults, resetLottery, runLottery, submitLotteryEntry, updateAvailableLotteryKinds } from '../lib/lottery-api';
 
@@ -69,5 +69,34 @@ describe('Bar Misaki lottery demo flow', () => {
     expect(published.entry?.winnerCode).toBe(admin.entries[0]?.winnerCode);
     await resetLottery('リセット');
     expect((await getPublicLotterySnapshot(deviceToken)).entry).toBeNull();
+  });
+
+  it('draws by random candidate position rather than application order', async () => {
+    const originalRandom = crypto.getRandomValues.bind(crypto);
+    let candidatePick = true;
+    const random = vi.spyOn(crypto, 'getRandomValues').mockImplementation((values) => {
+      if (values instanceof Uint32Array && candidatePick) {
+        values[0] = 2;
+        candidatePick = false;
+        return values;
+      }
+      return originalRandom(values);
+    });
+    for (const [index, name] of ['first', 'middle', 'last'].entries())
+      await submitLotteryEntry({ kind: 'private', representativeId: `@${name}`, representativeVrcName: name, token: token(String(index + 20)) });
+    await loginAdmin('3331');
+    await runLottery({ enabledKinds: ['private'], winnerSlots: { counter: 0, private: 1, table: 0 } });
+    const winner = (await getAdminLotterySnapshot()).entries.find((entry) => entry.status === 'winner');
+    expect(winner?.representativeId).toBe('@last');
+    random.mockRestore();
+  });
+
+  it('preserves recruitment category settings when resetting a round', async () => {
+    await loginAdmin('3331');
+    await updateAvailableLotteryKinds(['private', 'table']);
+    await resetLottery('リセット');
+    const admin = await getAdminLotterySnapshot();
+    expect(admin.settings.availableKinds).toEqual(['private', 'table']);
+    expect(admin.entries).toHaveLength(0);
   });
 });

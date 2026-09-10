@@ -145,8 +145,13 @@ const call = async <TInput, TOutput>(
 };
 
 const randomIndex = (max: number): number => {
+  if (!Number.isSafeInteger(max) || max <= 0)
+    throw new Error("抽選候補数が不正です");
   const values = new Uint32Array(1);
-  crypto.getRandomValues(values);
+  const range = 0x1_0000_0000;
+  const limit = range - (range % max);
+  do crypto.getRandomValues(values);
+  while (values[0]! >= limit);
   return values[0]! % max;
 };
 
@@ -858,6 +863,7 @@ export const resetLottery = async (confirmation: string): Promise<void> => {
   if (!isDemoMode) return void (await call("resetLottery", { confirmation }));
   const database = loadDemo();
   const next = initialDatabase();
+  next.settings.availableKinds = [...database.settings.availableKinds];
   next.audits = withAudit(
     database,
     "抽選リセット",
