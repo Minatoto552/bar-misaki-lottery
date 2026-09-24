@@ -21,6 +21,7 @@ import { Toast } from "../components/Feedback";
 import { useConfirmation } from "../components/useConfirmation";
 import { BrandMark } from "../components/Brand";
 import {
+  closeLottery,
   excludeWinners,
   getAdminLotterySnapshot,
   isAdminSessionActive,
@@ -66,7 +67,7 @@ const stateLabels = {
   drawing: "抽選中",
   drawn: "抽選済み・未公開",
   published: "結果公開済み",
-  closed: "受付終了",
+  closed: "受付締切済み",
 };
 const statusLabels = {
   pending: "抽選待ち",
@@ -274,7 +275,11 @@ export const AdminLotteryPage = () => {
     };
   }, [entries]);
   useEffect(() => {
-    if (snapshot?.settings.state !== "accepting") return;
+    if (
+      !snapshot ||
+      !["accepting", "closed"].includes(snapshot.settings.state)
+    )
+      return;
     setCounterSlots((value) => value || counts.counter.groups);
     setPrivateSlots((value) => value || counts.private.groups);
     setTableSlots((value) => value || counts.table.groups);
@@ -531,15 +536,19 @@ export const AdminLotteryPage = () => {
                         className="button-primary"
                         onClick={() =>
                           setActiveTab(
-                            snapshot.settings.state === "accepting"
+                            ["accepting", "closed"].includes(
+                              snapshot.settings.state,
+                            )
                               ? "draw"
                               : "results",
                           )
                         }
                       >
                         {snapshot.settings.state === "accepting"
-                          ? "抽選へ進む"
-                          : "結果を管理"}
+                          ? "受付を締め切る"
+                          : snapshot.settings.state === "closed"
+                            ? "抽選へ進む"
+                            : "結果を管理"}
                       </button>
                     </div>
                   </section>
@@ -688,6 +697,48 @@ export const AdminLotteryPage = () => {
                 <div className="space-y-8">
                   {activeTab === "draw" && (
                     <section>
+                      <div
+                        className={`mb-6 rounded-2xl border p-5 ${snapshot.settings.state === "accepting" ? "border-amber-200 bg-amber-50" : snapshot.settings.state === "closed" ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50"}`}
+                      >
+                        <p className="text-xs font-bold tracking-[0.15em] text-slate-500">
+                          APPLICATION STATUS
+                        </p>
+                        <h2 className="mt-1 text-lg font-bold">
+                          {snapshot.settings.state === "accepting"
+                            ? "現在、応募受付中です"
+                            : stateLabels[snapshot.settings.state]}
+                        </h2>
+                        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                          {snapshot.settings.state === "accepting"
+                            ? "受付を締め切ると、新規応募と応募キャンセルを停止します。この操作だけでは抽選は行われません。"
+                            : snapshot.settings.state === "closed"
+                              ? "応募受付は締め切られています。応募者と当選枠を確認し、準備ができたタイミングで抽選を実行してください。"
+                              : "この回の受付締切・抽選操作は完了しています。"}
+                        </p>
+                        {snapshot.settings.state === "accepting" ? (
+                          <button
+                            className="mt-4 rounded-xl bg-amber-500 px-5 py-3 font-semibold text-white disabled:opacity-40"
+                            disabled={busy}
+                            onClick={async () => {
+                              if (
+                                await confirm({
+                                  title: "応募受付を締め切りますか？",
+                                  description:
+                                    "締切後は新規応募と応募キャンセルができなくなります。抽選はまだ行われません。",
+                                  label: "受付を締め切る",
+                                })
+                              )
+                                void execute(
+                                  closeLottery,
+                                  "応募受付を締め切りました。抽選はまだ実行されていません",
+                                );
+                            }}
+                            type="button"
+                          >
+                            応募受付を締め切る
+                          </button>
+                        ) : null}
+                      </div>
                       <h2 className="text-xl font-bold">抽選対象と当選枠</h2>
                       <p className="mt-2 text-sm text-slate-500">
                         今回抽選する席だけを選択してください。未選択の席種は応募を保持したまま抽選対象から除外されます。
@@ -761,9 +812,7 @@ export const AdminLotteryPage = () => {
                         disabled={
                           busy ||
                           !enabledKinds.size ||
-                          !["accepting", "closed"].includes(
-                            snapshot.settings.state,
-                          )
+                          snapshot.settings.state !== "closed"
                         }
                         onClick={async () => {
                           const summary = [...enabledKinds]
@@ -792,8 +841,13 @@ export const AdminLotteryPage = () => {
                         }}
                         type="button"
                       >
-                        選択した内容で抽選開始
+                        抽選を実行する
                       </button>
+                      {snapshot.settings.state === "accepting" ? (
+                        <p className="mt-3 text-sm font-semibold text-amber-700">
+                          抽選を実行するには、先に応募受付を締め切ってください。
+                        </p>
+                      ) : null}
                     </section>
                   )}
                   {activeTab === "results" && (

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfirmModal } from '../components/Feedback';
 import { LotteryGacha } from '../components/LotteryGacha';
 import { LotteryPage } from '../pages/LotteryPage';
-import { cancelWinnerByCode, confirmWinnerByCode, ensureDeviceToken, getAdminLotterySnapshot, loginAdmin, lookupWinnerCode, publishLotteryResults, redrawLottery, resetLottery, runLottery, submitLotteryEntry } from '../lib/lottery-api';
+import { cancelWinnerByCode, closeLottery, confirmWinnerByCode, ensureDeviceToken, getAdminLotterySnapshot, loginAdmin, lookupWinnerCode, publishLotteryResults, redrawLottery, resetLottery, runLottery, submitLotteryEntry } from '../lib/lottery-api';
 
 let root: Root;
 let container: HTMLDivElement;
@@ -25,6 +25,7 @@ const byText = (text:string) => [...document.querySelectorAll('button')].find(bu
 async function winnerFixture() {
   await submitLotteryEntry({kind:'private',representativeId:'@ui_test',representativeVrcName:'Test Guest',token:ensureDeviceToken()});
   await loginAdmin('3331');
+  await closeLottery();
   await runLottery({enabledKinds:['private'],winnerSlots:{counter:0,private:1,table:0}});
   await publishLotteryResults();
   return (await getAdminLotterySnapshot()).entries[0].winnerCode!;
@@ -79,7 +80,7 @@ describe('redesigned lottery experience', () => {
   });
   it('preserves locked winners during redraw and code status across devices', async () => {
     await submitLotteryEntry({kind:'private',representativeId:'@redraw',representativeVrcName:'Guest',token:ensureDeviceToken()});
-    await loginAdmin('3331'); await runLottery({enabledKinds:['private'],winnerSlots:{counter:0,private:1,table:0}});
+    await loginAdmin('3331'); await closeLottery(); await runLottery({enabledKinds:['private'],winnerSlots:{counter:0,private:1,table:0}});
     const entry=(await getAdminLotterySnapshot()).entries[0];
     await redrawLottery([entry.id]);
     expect((await getAdminLotterySnapshot()).entries[0].winnerCode).toBe(entry.winnerCode);

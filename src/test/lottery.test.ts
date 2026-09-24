@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { cancelLotteryEntry, ensureDeviceToken, getAdminLotterySnapshot, getPublicLotterySnapshot, loginAdmin, publishLotteryResults, resetLottery, runLottery, submitLotteryEntry, updateAvailableLotteryKinds } from '../lib/lottery-api';
+import { cancelLotteryEntry, closeLottery, ensureDeviceToken, getAdminLotterySnapshot, getPublicLotterySnapshot, loginAdmin, publishLotteryResults, resetLottery, runLottery, submitLotteryEntry, updateAvailableLotteryKinds } from '../lib/lottery-api';
 
 const token = (suffix: string) => `00000000-0000-4000-8000-000000000000-00000000-0000-4000-8000-${suffix.padStart(12, '0')}`;
 
@@ -42,6 +42,7 @@ describe('Bar Misaki lottery demo flow', () => {
     await submitLotteryEntry({ kind: 'counter', representativeId: '@counter', representativeVrcName: 'Counter', companionVrcName: 'Counter Partner', token: token('5') });
     await submitLotteryEntry({ kind: 'table', representativeId: '@table', representativeVrcName: 'Table', token: token('6') });
     await loginAdmin('3331');
+    await closeLottery();
     await runLottery({ enabledKinds: ['counter'], winnerSlots: { counter: 1, private: 0, table: 1 } });
     const admin = await getAdminLotterySnapshot();
     expect(admin.entries.find((entry) => entry.kind === 'counter')?.status).toBe('winner');
@@ -55,6 +56,7 @@ describe('Bar Misaki lottery demo flow', () => {
     const deviceToken = ensureDeviceToken();
     await submitLotteryEntry({ kind: 'table', representativeId: '@misaki_test', representativeVrcName: 'Misaki Test', companionVrcName: 'Partner 01', token: deviceToken });
     await loginAdmin('3331');
+    await closeLottery();
     await runLottery({ enabledKinds: ['table'], winnerSlots: { counter: 0, private: 0, table: 1 } });
     const beforePublish = await getPublicLotterySnapshot(deviceToken);
     expect(beforePublish.settings.state).toBe('drawn');
@@ -85,6 +87,7 @@ describe('Bar Misaki lottery demo flow', () => {
     for (const [index, name] of ['first', 'middle', 'last'].entries())
       await submitLotteryEntry({ kind: 'private', representativeId: `@${name}`, representativeVrcName: name, token: token(String(index + 20)) });
     await loginAdmin('3331');
+    await closeLottery();
     await runLottery({ enabledKinds: ['private'], winnerSlots: { counter: 0, private: 1, table: 0 } });
     const winner = (await getAdminLotterySnapshot()).entries.find((entry) => entry.status === 'winner');
     expect(winner?.representativeId).toBe('@last');
@@ -98,5 +101,22 @@ describe('Bar Misaki lottery demo flow', () => {
     const admin = await getAdminLotterySnapshot();
     expect(admin.settings.availableKinds).toEqual(['private', 'table']);
     expect(admin.entries).toHaveLength(0);
+  });
+
+  it('closes applications without drawing and requires closure before drawing', async () => {
+    const firstToken = token('40');
+    await submitLotteryEntry({ kind: 'private', representativeId: '@close_test', representativeVrcName: 'Close Test', token: firstToken });
+    await loginAdmin('3331');
+    await expect(runLottery({ enabledKinds: ['private'], winnerSlots: { counter: 0, private: 1, table: 0 } })).rejects.toThrow('締め切ってから');
+    await closeLottery();
+    const closed = await getAdminLotterySnapshot();
+    expect(closed.settings.state).toBe('closed');
+    expect(closed.entries[0].status).toBe('pending');
+    expect(closed.entries[0].drawnAt).toBeNull();
+    expect(closed.entries[0].winnerCode).toBeNull();
+    await expect(cancelLotteryEntry(firstToken)).rejects.toThrow('受付締切後');
+    await expect(submitLotteryEntry({ kind: 'private', representativeId: '@too_late', representativeVrcName: 'Too Late', token: token('41') })).rejects.toThrow('受け付け');
+    await runLottery({ enabledKinds: ['private'], winnerSlots: { counter: 0, private: 1, table: 0 } });
+    expect((await getAdminLotterySnapshot()).settings.state).toBe('drawn');
   });
 });

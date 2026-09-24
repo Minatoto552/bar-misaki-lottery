@@ -380,7 +380,7 @@ export const cancelLotteryEntry = async (token: string): Promise<void> => {
   }
   let database = loadDemo();
   if (database.settings.state !== "accepting") {
-    throw new Error("抽選開始後は応募をキャンセルできません");
+    throw new Error("受付締切後は応募をキャンセルできません");
   }
   const entryId = database.tokenEntryMap[token];
   const entry = database.entries.find(
@@ -484,6 +484,26 @@ export const updateAvailableLotteryKinds = async (
   saveDemo(database);
 };
 
+export const closeLottery = async (): Promise<void> => {
+  if (!isDemoMode) {
+    await call("closeLottery", {});
+    return;
+  }
+  let database = loadDemo();
+  if (database.settings.state !== "accepting")
+    throw new Error("応募受付中の場合のみ締め切れます");
+  const timestamp = nowIso();
+  database.settings.state = "closed";
+  database.settings.lastUpdatedAt = timestamp;
+  database = withAudit(
+    database,
+    "応募受付締切",
+    "all",
+    "応募受付を締め切り",
+  );
+  saveDemo(database);
+};
+
 export const runLottery = async ({
   enabledKinds,
   winnerSlots,
@@ -493,12 +513,8 @@ export const runLottery = async ({
     return;
   }
   let database = loadDemo();
-  if (
-    database.settings.state !== "accepting" &&
-    database.settings.state !== "closed"
-  ) {
-    throw new Error("現在の状態では抽選を開始できません");
-  }
+  if (database.settings.state !== "closed")
+    throw new Error("応募受付を締め切ってから抽選してください");
   const current = database.entries.filter(
     (entry) => entry.roundId === database.settings.roundId,
   );

@@ -52,4 +52,21 @@ describe('shared Sites backend', () => {
     expect(admin.body.settings.availableKinds).toEqual(['private', 'table']);
     expect(admin.body.entries).toHaveLength(0);
   });
+
+  it('closes applications separately before running the draw', async () => {
+    const env = { DB: new MemoryD1(), ADMIN_SHARED_PASSWORD: '3331' };
+    const device = 'c'.repeat(64);
+    expect((await post(env, 'submitLotteryEntry', { kind: 'private', representativeId: '@close', representativeVrcName: 'Close VRC', token: device })).status).toBe(200);
+    const login = await post(env, 'adminLogin', { password: '3331' });
+    const session = login.body.sessionToken;
+    expect((await post(env, 'runLottery', { enabledKinds: ['private'], winnerSlots: { counter: 0, private: 1, table: 0 } }, session)).status).toBe(400);
+    expect((await post(env, 'closeLottery', {}, session)).status).toBe(200);
+    const closed = await post(env, 'getAdminLottery', {}, session);
+    expect(closed.body.settings.state).toBe('closed');
+    expect(closed.body.entries[0].status).toBe('pending');
+    expect(closed.body.entries[0].drawnAt).toBeNull();
+    expect((await post(env, 'submitLotteryEntry', { kind: 'private', representativeId: '@late', representativeVrcName: 'Late VRC', token: 'd'.repeat(64) })).status).toBe(400);
+    expect((await post(env, 'runLottery', { enabledKinds: ['private'], winnerSlots: { counter: 0, private: 1, table: 0 } }, session)).status).toBe(200);
+    expect((await post(env, 'getAdminLottery', {}, session)).body.settings.state).toBe('drawn');
+  });
 });
