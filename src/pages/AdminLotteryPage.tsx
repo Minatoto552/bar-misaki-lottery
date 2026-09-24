@@ -62,6 +62,11 @@ const kindLabels: Record<LotteryKind, string> = {
   private: "個室",
   table: "テーブル席",
 };
+const winnerKindOrder: Record<LotteryKind, number> = {
+  table: 0,
+  counter: 1,
+  private: 2,
+};
 const stateLabels = {
   accepting: "応募受付中",
   drawing: "抽選中",
@@ -302,7 +307,16 @@ export const AdminLotteryPage = () => {
           entry.companionVrcName?.toLowerCase().includes(needle)),
     );
   }, [activeTab, entries, search]);
-  const winners = entries.filter((entry) => entry.status === "winner");
+  const winners = useMemo(
+    () =>
+      entries
+        .filter((entry) => entry.status === "winner")
+        .sort(
+          (left, right) =>
+            winnerKindOrder[left.kind] - winnerKindOrder[right.kind],
+        ),
+    [entries],
+  );
   const excluded = entries.filter((entry) => entry.status === "excluded");
   const cancelled = entries.filter((entry) => entry.status === "cancelled");
   const selectedWinners = winners.filter((entry) => selected.has(entry.id));
