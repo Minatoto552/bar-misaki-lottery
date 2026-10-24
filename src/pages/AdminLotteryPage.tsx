@@ -14,6 +14,7 @@ import { Link } from "react-router-dom";
 
 import type {
   AdminLotterySnapshot,
+  LotteryConfigurationInput,
   LotteryEntry,
   LotteryKind,
 } from "../../shared/models";
@@ -21,6 +22,7 @@ import { Toast } from "../components/Feedback";
 import { useConfirmation } from "../components/useConfirmation";
 import { BrandMark } from "../components/Brand";
 import {
+  adminUpdateLotteryEntry,
   closeLottery,
   excludeWinners,
   getAdminLotterySnapshot,
@@ -33,7 +35,7 @@ import {
   resetLottery,
   runLottery,
   undoExclusions,
-  updateAvailableLotteryKinds,
+  updateLotteryConfiguration,
 } from "../lib/lottery-api";
 
 const tabs = [
@@ -95,11 +97,13 @@ const EntryTable = ({
   selected,
   onSelect,
   selectable = false,
+  onEdit,
 }: {
   entries: LotteryEntry[];
   selected: Set<string>;
   onSelect: (id: string, checked: boolean) => void;
   selectable?: boolean;
+  onEdit?: (entry: LotteryEntry) => void;
 }) => (
   <div className="overflow-x-auto rounded-2xl border border-slate-200">
     <table className="min-w-full text-left text-sm">
@@ -108,6 +112,8 @@ const EntryTable = ({
           {selectable ? <th className="px-4 py-3">選択</th> : null}
           <th className="px-4 py-3">応募番号</th>
           <th className="px-4 py-3">応募項目</th>
+          <th className="px-4 py-3">希望条件</th>
+          <th className="px-4 py-3">割当結果</th>
           <th className="px-4 py-3">代表者X</th>
           <th className="px-4 py-3">代表者VRC名</th>
           <th className="px-4 py-3">同行者VRC名</th>
@@ -115,6 +121,7 @@ const EntryTable = ({
           <th className="px-4 py-3">応募日時</th>
           <th className="px-4 py-3">状態</th>
           <th className="px-4 py-3">当選者コード</th>
+          {onEdit ? <th className="px-4 py-3">管理</th> : null}
         </tr>
       </thead>
       <tbody className="divide-y divide-slate-100 bg-white">
@@ -139,6 +146,16 @@ const EntryTable = ({
               >
                 {kindLabels[entry.kind]}
               </span>
+            </td>
+            <td className="whitespace-nowrap px-4 py-3 text-xs font-semibold">
+              {entry.preferenceMode === "omakase"
+                ? `おまかせ${entry.legacyAutoOmakase ? "（自動移行）" : ""}`
+                : `${entry.requestedInstanceId?.replace("instance", "インスタンス") ?? "未設定"}・${kindLabels[entry.kind]}`}
+            </td>
+            <td className="whitespace-nowrap px-4 py-3 text-xs font-semibold">
+              {entry.assignedInstanceId
+                ? `${entry.assignedInstanceId.replace("instance", "インスタンス")}・${kindLabels[entry.assignedKind ?? entry.kind]}`
+                : "—"}
             </td>
             <td className="whitespace-nowrap px-4 py-3">
               {entry.representativeId}
@@ -165,6 +182,13 @@ const EntryTable = ({
             <td className="whitespace-nowrap px-4 py-3 font-mono font-semibold">
               {entry.winnerCode ?? "—"}
             </td>
+            {onEdit ? (
+              <td className="px-4 py-3">
+                <button className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold" onClick={() => onEdit(entry)} type="button">
+                  条件を修正
+                </button>
+              </td>
+            ) : null}
           </tr>
         ))}
       </tbody>
@@ -183,16 +207,9 @@ export const AdminLotteryPage = () => {
   const [snapshot, setSnapshot] = useState<AdminLotterySnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [search, setSearch] = useState("");
-  const [counterSlots, setCounterSlots] = useState(0);
-  const [privateSlots, setPrivateSlots] = useState(0);
-  const [tableSlots, setTableSlots] = useState(0);
-  const [enabledKinds, setEnabledKinds] = useState<Set<LotteryKind>>(
-    new Set(["counter", "private", "table"]),
-  );
-  const [availableKinds, setAvailableKinds] = useState<Set<LotteryKind>>(
-    new Set(["counter", "private", "table"]),
-  );
-  const [availableKindsDirty, setAvailableKindsDirty] = useState(false);
+  const [configuration, setConfiguration] =
+    useState<LotteryConfigurationInput | null>(null);
+  const [entryEditor, setEntryEditor] = useState<LotteryEntry | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [lockedWinners, setLockedWinners] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -220,9 +237,14 @@ export const AdminLotteryPage = () => {
     return () => window.clearInterval(id);
   }, [refresh]);
   useEffect(() => {
-    if (snapshot && !availableKindsDirty)
-      setAvailableKinds(new Set(snapshot.settings.availableKinds));
-  }, [snapshot, availableKindsDirty]);
+    if (!snapshot) return;
+    setConfiguration({
+      applicationDeadline: snapshot.settings.applicationDeadline,
+      instances: snapshot.settings.instances,
+      recruitmentSlots: snapshot.settings.recruitmentSlots,
+      featureSettings: snapshot.settings.featureSettings,
+    });
+  }, [snapshot?.settings.lastUpdatedAt]);
   useEffect(() => {
     sessionStorage.setItem(
       "bar-misaki-redraw-locks",
@@ -279,22 +301,6 @@ export const AdminLotteryPage = () => {
       table: make("table"),
     };
   }, [entries]);
-  useEffect(() => {
-    if (
-      !snapshot ||
-      !["accepting", "closed"].includes(snapshot.settings.state)
-    )
-      return;
-    setCounterSlots((value) => value || counts.counter.groups);
-    setPrivateSlots((value) => value || counts.private.groups);
-    setTableSlots((value) => value || counts.table.groups);
-  }, [
-    snapshot?.settings.roundId,
-    snapshot?.settings.state,
-    counts.counter.groups,
-    counts.private.groups,
-    counts.table.groups,
-  ]);
   const filteredEntries = useMemo(() => {
     const kind = activeTab as LotteryKind;
     const needle = search.trim().toLowerCase();
@@ -611,67 +617,133 @@ export const AdminLotteryPage = () => {
                     </div>
                   </div>
                   <p className="mt-4 text-sm leading-relaxed text-slate-500">
-                    お客様用の応募画面に表示する席種を選択してください。ここで非表示にした項目には新しく応募できなくなります。抽選対象の設定とは別に管理されます。
+                    インスタンスごとに席種・募集数・有効状態を設定します。表示設定と募集枠の有効状態は別々に管理されます。
                   </p>
-                  <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                    {(["counter", "private", "table"] as const).map((item) => {
-                      const active = availableKinds.has(item);
-                      const Icon =
-                        item === "counter"
-                          ? Users
-                          : item === "private"
-                            ? DoorOpen
-                            : Armchair;
-                      return (
-                        <button
-                          aria-pressed={active}
-                          className={`rounded-2xl border p-5 text-left transition ${active ? "border-violet-500 bg-violet-50 text-violet-950 shadow-sm" : "border-slate-200 bg-slate-50 text-slate-400"}`}
-                          key={item}
-                          onClick={async () => {
-                            setAvailableKinds((current) => {
-                              const next = new Set(current);
-                              if (next.has(item)) next.delete(item);
-                              else next.add(item);
-                              return next;
-                            });
-                            setAvailableKindsDirty(true);
-                          }}
-                          type="button"
-                        >
-                          <Icon size={24} />
-                          <span className="mt-5 block text-xs font-bold tracking-wider">
-                            {active ? "募集中・表示" : "募集停止・非表示"}
-                          </span>
-                          <strong className="mt-1 block text-lg">
-                            {kindLabels[item]}
-                          </strong>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {!availableKinds.size ? (
-                    <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-                      募集項目を1つ以上選択してください。
-                    </p>
+                  {configuration ? (
+                    <div className="mt-6 space-y-6">
+                      <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+                        {([
+                          ["showInstanceSelection", "インスタンス選択を表示"],
+                          ["showKindSelection", "席種選択を表示"],
+                          ["showOmakase", "おまかせを表示"],
+                        ] as const).map(([key, label]) => (
+                          <label className="flex items-center gap-3 text-sm font-semibold" key={key}>
+                            <input
+                              checked={configuration.featureSettings[key]}
+                              onChange={(event) =>
+                                setConfiguration((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        featureSettings: {
+                                          ...current.featureSettings,
+                                          [key]: event.target.checked,
+                                        },
+                                      }
+                                    : current,
+                                )
+                              }
+                              type="checkbox"
+                            />
+                            {label}
+                          </label>
+                        ))}
+                        <label className="text-sm font-semibold sm:col-span-2">
+                          応募締切時刻（任意）
+                          <input
+                            className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3"
+                            onChange={(event) =>
+                              setConfiguration((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      applicationDeadline: event.target.value
+                                        ? new Date(event.target.value).toISOString()
+                                        : null,
+                                    }
+                                  : current,
+                              )
+                            }
+                            type="datetime-local"
+                            value={configuration.applicationDeadline ? new Date(new Date(configuration.applicationDeadline).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ""}
+                          />
+                        </label>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        {(["counter", "table", "private"] as const).map((item) => (
+                          <label className="flex items-center gap-3 rounded-xl border border-slate-200 p-3 text-sm font-semibold" key={item}>
+                            <input
+                              checked={configuration.featureSettings.kindVisibility[item]}
+                              onChange={(event) =>
+                                setConfiguration((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        featureSettings: {
+                                          ...current.featureSettings,
+                                          kindVisibility: {
+                                            ...current.featureSettings.kindVisibility,
+                                            [item]: event.target.checked,
+                                          },
+                                        },
+                                      }
+                                    : current,
+                                )
+                              }
+                              type="checkbox"
+                            />
+                            {kindLabels[item]}を表示
+                          </label>
+                        ))}
+                      </div>
+                      {configuration.instances.map((instance) => (
+                        <section className="rounded-2xl border border-slate-200 p-4" key={instance.id}>
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <input
+                              aria-label={`${instance.label}の表示名`}
+                              className="rounded-xl border border-slate-300 px-3 py-2 font-bold"
+                              onChange={(event) => setConfiguration((current) => current ? {...current, instances: current.instances.map((item) => item.id === instance.id ? {...item, label:event.target.value} : item)} : current)}
+                              value={instance.label}
+                            />
+                            <div className="flex gap-4 text-sm font-semibold">
+                              <label><input checked={instance.visible} onChange={(event) => setConfiguration((current) => current ? {...current, instances: current.instances.map((item) => item.id === instance.id ? {...item, visible:event.target.checked} : item)} : current)} type="checkbox" /> 表示</label>
+                              <label><input checked={instance.enabled} onChange={(event) => setConfiguration((current) => current ? {...current, instances: current.instances.map((item) => item.id === instance.id ? {...item, enabled:event.target.checked} : item)} : current)} type="checkbox" /> 使用</label>
+                            </div>
+                          </div>
+                          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                            {(["counter", "table", "private"] as const).map((item) => {
+                              const slot = configuration.recruitmentSlots.find((candidate) => candidate.instanceId === instance.id && candidate.kind === item)!;
+                              const applications = entries.filter((entry) => entry.preferenceMode === "specified" && entry.requestedInstanceId === instance.id && entry.kind === item).length;
+                              const winners = entries.filter((entry) => entry.status === "winner" && entry.assignedInstanceId === instance.id && entry.assignedKind === item).length;
+                              return (
+                                <div className="rounded-xl bg-slate-50 p-3" key={item}>
+                                  <strong>{kindLabels[item]}</strong>
+                                  <p className="mt-1 text-xs text-slate-500">応募 {applications}組・当選 {winners}組</p>
+                                  <label className="mt-3 flex items-center gap-2 text-sm"><input checked={slot.enabled} onChange={(event) => setConfiguration((current) => current ? {...current, recruitmentSlots: current.recruitmentSlots.map((candidate) => candidate.id === slot.id ? {...candidate, enabled:event.target.checked} : candidate)} : current)} type="checkbox" /> 募集枠を有効化</label>
+                                  <label className="mt-2 block text-sm">募集数<input className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2" min={0} onChange={(event) => setConfiguration((current) => current ? {...current, recruitmentSlots: current.recruitmentSlots.map((candidate) => candidate.id === slot.id ? {...candidate, capacity:Number(event.target.value)} : candidate)} : current)} type="number" value={slot.capacity} /></label>
+                                  <div className="mt-2 grid grid-cols-2 gap-2">
+                                    <label className="block text-xs font-semibold">最低人数<input className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2" max={2} min={1} onChange={(event) => setConfiguration((current) => current ? {...current, recruitmentSlots: current.recruitmentSlots.map((candidate) => candidate.id === slot.id ? {...candidate, minPeople:Number(event.target.value)} : candidate)} : current)} type="number" value={slot.minPeople} /></label>
+                                    <label className="block text-xs font-semibold">最大人数<input className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2" max={2} min={1} onChange={(event) => setConfiguration((current) => current ? {...current, recruitmentSlots: current.recruitmentSlots.map((candidate) => candidate.id === slot.id ? {...candidate, maxPeople:Number(event.target.value)} : candidate)} : current)} type="number" value={slot.maxPeople} /></label>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      ))}
+                      <div className="rounded-xl bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-900">
+                        有効な募集枠：{configuration.recruitmentSlots.filter((slot) => slot.enabled && slot.capacity > 0).reduce((sum, slot) => sum + slot.capacity, 0)}組
+                      </div>
+                      <button
+                        className="rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white disabled:opacity-40"
+                        disabled={busy || snapshot.settings.state !== "accepting"}
+                        onClick={() => void execute(() => updateLotteryConfiguration(configuration), "インスタンス・募集枠設定を更新しました")}
+                        type="button"
+                      >
+                        設定を保存
+                      </button>
+                    </div>
                   ) : null}
-                  <button
-                    className="mt-6 rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
-                    disabled={
-                      busy ||
-                      !availableKinds.size ||
-                      !availableKindsDirty ||
-                      snapshot.settings.state !== "accepting"
-                    }
-                    onClick={() =>
-                      void execute(async () => {
-                        await updateAvailableLotteryKinds([...availableKinds]);
-                        setAvailableKindsDirty(false);
-                      }, "募集項目を更新しました")
-                    }
-                    type="button"
-                  >
-                    募集項目を保存
-                  </button>
                   {snapshot.settings.state !== "accepting" ? (
                     <p className="mt-3 text-sm font-semibold text-amber-700">
                       募集項目は「応募受付中」のときだけ変更できます。
@@ -702,9 +774,27 @@ export const AdminLotteryPage = () => {
                   </div>
                   <EntryTable
                     entries={filteredEntries}
+                    onEdit={setEntryEditor}
                     onSelect={() => undefined}
                     selected={selected}
                   />
+                  {entryEditor ? (
+                    <div className="mt-4 rounded-2xl border border-violet-200 bg-violet-50 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="font-bold">{entryEditor.entryNumber} の応募条件を修正</h3>
+                          <p className="text-sm text-slate-600">締切後の変更も操作履歴に記録されます。</p>
+                        </div>
+                        <button className="text-sm font-semibold" onClick={() => setEntryEditor(null)} type="button">閉じる</button>
+                      </div>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <label className="text-sm font-semibold">応募方式<select className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2" onChange={(event) => setEntryEditor((current) => current ? {...current, preferenceMode:event.target.value as LotteryEntry["preferenceMode"]} : current)} value={entryEditor.preferenceMode}><option value="specified">条件指定</option><option value="omakase">おまかせ</option></select></label>
+                        <label className="text-sm font-semibold">インスタンス<select className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2" disabled={entryEditor.preferenceMode === "omakase"} onChange={(event) => setEntryEditor((current) => current ? {...current, requestedInstanceId:event.target.value as LotteryEntry["requestedInstanceId"]} : current)} value={entryEditor.requestedInstanceId ?? "instance1"}>{snapshot.settings.instances.map((instance) => <option key={instance.id} value={instance.id}>{instance.label}</option>)}</select></label>
+                        <label className="text-sm font-semibold">席種<select className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2" disabled={entryEditor.preferenceMode === "omakase"} onChange={(event) => setEntryEditor((current) => current ? {...current, kind:event.target.value as LotteryKind} : current)} value={entryEditor.kind}>{(["counter", "table", "private"] as const).map((item) => <option key={item} value={item}>{kindLabels[item]}</option>)}</select></label>
+                      </div>
+                      <button className="mt-4 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white" onClick={() => void execute(async () => { await adminUpdateLotteryEntry(entryEditor.id, {kind:entryEditor.kind, instanceId:entryEditor.requestedInstanceId ?? "instance1", preferenceMode:entryEditor.preferenceMode}); setEntryEditor(null); }, "応募条件を修正しました")} type="button">修正を保存</button>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               {activeTab === "results" || activeTab === "draw" ? (
@@ -755,85 +845,40 @@ export const AdminLotteryPage = () => {
                       </div>
                       <h2 className="text-xl font-bold">抽選対象と当選枠</h2>
                       <p className="mt-2 text-sm text-slate-500">
-                        今回抽選する席だけを選択してください。未選択の席種は応募を保持したまま抽選対象から除外されます。
+                        募集項目設定で有効にしたインスタンス・席種・募集数を使用します。おまかせ応募は指定応募の抽選後、残っている有効枠へ割り当てます。
                       </p>
-                      <div className="draw-controls">
-                        <div className="draw-row draw-head">
-                          <span>抽選対象</span>
-                          <span>応募数</span>
-                          <span>当選組数</span>
-                        </div>
-                        {(["counter", "private", "table"] as const).map(
-                          (item) => (
-                            <div className="draw-row" key={item}>
-                              <label>
-                                <input
-                                  type="checkbox"
-                                  checked={enabledKinds.has(item)}
-                                  disabled={
-                                    busy ||
-                                    !["accepting", "closed"].includes(
-                                      snapshot.settings.state,
-                                    )
-                                  }
-                                  onChange={(event) =>
-                                    setEnabledKinds((current) => {
-                                      const next = new Set(current);
-                                      if (event.target.checked) next.add(item);
-                                      else next.delete(item);
-                                      return next;
-                                    })
-                                  }
-                                />
-                                {kindLabels[item]}
-                              </label>
-                              <span>{counts[item].groups}組</span>
-                              <input
-                                aria-label={kindLabels[item] + "当選組数"}
-                                type="number"
-                                min={0}
-                                max={counts[item].groups}
-                                disabled={
-                                  !enabledKinds.has(item) ||
-                                  busy ||
-                                  !["accepting", "closed"].includes(
-                                    snapshot.settings.state,
-                                  )
-                                }
-                                value={
-                                  item === "counter"
-                                    ? counterSlots
-                                    : item === "private"
-                                      ? privateSlots
-                                      : tableSlots
-                                }
-                                onChange={(event) =>
-                                  (item === "counter"
-                                    ? setCounterSlots
-                                    : item === "private"
-                                      ? setPrivateSlots
-                                      : setTableSlots)(
-                                    Number(event.target.value),
-                                  )
-                                }
-                              />
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                        {snapshot.settings.recruitmentSlots
+                          .filter((slot) => slot.enabled && slot.capacity > 0)
+                          .map((slot) => (
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4" key={slot.id}>
+                              <strong className="block">
+                                {snapshot.settings.instances.find((instance) => instance.id === slot.instanceId)?.label}
+                              </strong>
+                              <span className="text-sm text-slate-600">{kindLabels[slot.kind]}・募集 {slot.capacity}組</span>
+                              <span className="mt-2 block text-xs font-semibold text-violet-700">
+                                指定応募 {entries.filter((entry) => entry.preferenceMode === "specified" && entry.requestedInstanceId === slot.instanceId && entry.kind === slot.kind).length}組
+                              </span>
                             </div>
-                          ),
-                        )}
+                          ))}
+                        <div className="rounded-xl border border-violet-200 bg-violet-50 p-4">
+                          <strong className="block">おまかせ応募</strong>
+                          <span className="text-sm text-violet-800">{entries.filter((entry) => entry.preferenceMode === "omakase").length}組</span>
+                        </div>
                       </div>
                       <button
                         className="button-primary mt-4 disabled:opacity-40"
                         disabled={
                           busy ||
-                          !enabledKinds.size ||
+                          !snapshot.settings.recruitmentSlots.some(
+                            (slot) => slot.enabled && slot.capacity > 0,
+                          ) ||
                           snapshot.settings.state !== "closed"
                         }
                         onClick={async () => {
-                          const summary = [...enabledKinds]
-                            .map(
-                              (item) =>
-                                `${kindLabels[item]}${item === "counter" ? counterSlots : item === "private" ? privateSlots : tableSlots}組`,
-                            )
+                          const summary = snapshot.settings.recruitmentSlots
+                            .filter((slot) => slot.enabled && slot.capacity > 0)
+                            .map((slot) => `${snapshot.settings.instances.find((instance) => instance.id === slot.instanceId)?.label}・${kindLabels[slot.kind]}${slot.capacity}組`)
                             .join("、");
                           if (
                             await confirm(
@@ -843,11 +888,11 @@ export const AdminLotteryPage = () => {
                             void execute(
                               () =>
                                 runLottery({
-                                  enabledKinds: [...enabledKinds],
+                                  enabledKinds: snapshot.settings.availableKinds,
                                   winnerSlots: {
-                                    counter: counterSlots,
-                                    private: privateSlots,
-                                    table: tableSlots,
+                                    counter: snapshot.settings.counterWinnerSlots,
+                                    private: snapshot.settings.privateWinnerSlots,
+                                    table: snapshot.settings.tableWinnerSlots,
                                   },
                                 }),
                               "抽選が完了しました。結果画面で確認してください",

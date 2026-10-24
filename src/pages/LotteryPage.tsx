@@ -12,7 +12,12 @@ import {
   Users,
 } from "lucide-react";
 
-import type { LotteryKind, PublicLotterySnapshot } from "../../shared/models";
+import type {
+  InstanceId,
+  LotteryKind,
+  PreferenceMode,
+  PublicLotterySnapshot,
+} from "../../shared/models";
 import { submitLotterySchema } from "../../shared/validation";
 import { Toast } from "../components/Feedback";
 import { useConfirmation } from "../components/useConfirmation";
@@ -45,6 +50,11 @@ const kindLabels: Record<LotteryKind, string> = {
 
 export const LotteryPage = () => {
   const [kind, setKind] = useState<LotteryKind>("counter");
+  const [instanceId, setInstanceId] = useState<InstanceId>("instance1");
+  const [preferenceMode, setPreferenceMode] =
+    useState<PreferenceMode>("specified");
+  const [applicantCount, setApplicantCount] = useState<1 | 2>(1);
+  const [editing, setEditing] = useState(false);
   const [representativeId, setRepresentativeId] = useState("");
   const [representativeVrcName, setRepresentativeVrcName] = useState("");
   const [companionVrcName, setCompanionVrcName] = useState("");
@@ -186,9 +196,42 @@ export const LotteryPage = () => {
     if (available?.length && !available.includes(kind)) setKind(available[0]);
   }, [snapshot?.settings.availableKinds, kind]);
 
+  useEffect(() => {
+    const current = snapshot?.entry;
+    if (!current) return;
+    setKind(current.kind);
+    setInstanceId(current.requestedInstanceId ?? "instance1");
+    setPreferenceMode(current.preferenceMode);
+    setRepresentativeId(current.representativeId);
+    setRepresentativeVrcName(current.representativeVrcName);
+    setCompanionVrcName(current.companionVrcName ?? "");
+    setApplicantCount(current.peopleCount === 2 ? 2 : 1);
+  }, [snapshot?.entry?.id]);
+
   const submit = async () => {
+    if (applicantCount === 2 && !companionVrcName.trim()) {
+      setError("同行者のVRC名を入力してください");
+      return;
+    }
+    const fallbackSlot = activeSlots.find(
+      (slot) =>
+        applicantCount >= slot.minPeople &&
+        applicantCount <= slot.maxPeople &&
+        (!snapshot?.settings.featureSettings.showKindSelection ||
+          slot.kind === kind) &&
+        (!snapshot?.settings.featureSettings.showInstanceSelection ||
+          slot.instanceId === instanceId),
+    );
     const parsed = submitLotterySchema.safeParse({
-      kind,
+      kind:
+        snapshot?.settings.featureSettings.showKindSelection || !fallbackSlot
+          ? kind
+          : fallbackSlot.kind,
+      instanceId:
+        snapshot?.settings.featureSettings.showInstanceSelection || !fallbackSlot
+          ? instanceId
+          : fallbackSlot.instanceId,
+      preferenceMode,
       representativeId,
       representativeVrcName,
       companionVrcName,
@@ -203,6 +246,7 @@ export const LotteryPage = () => {
     setNotice("");
     try {
       await submitLotteryEntry(parsed.data);
+      setEditing(false);
       await refresh();
     } catch (caught) {
       setError(
@@ -244,6 +288,32 @@ export const LotteryPage = () => {
   const entry = activeSnapshot?.entry;
   const isPublished = activeSnapshot?.settings.state === "published";
   const availableKinds = snapshot?.settings.availableKinds ?? [];
+  const activeInstances =
+    snapshot?.settings.instances.filter(
+      (instance) => instance.visible && instance.enabled,
+    ) ?? [];
+  const activeSlots =
+    snapshot?.settings.recruitmentSlots.filter(
+      (slot) =>
+        slot.enabled &&
+        slot.capacity > 0 &&
+        activeInstances.some((instance) => instance.id === slot.instanceId) &&
+        snapshot.settings.featureSettings.kindVisibility[slot.kind],
+    ) ?? [];
+  const selectableKinds = availableKinds.filter((item) =>
+    activeSlots.some(
+      (slot) =>
+        slot.kind === item &&
+        applicantCount >= slot.minPeople &&
+        applicantCount <= slot.maxPeople &&
+        (!snapshot?.settings.featureSettings.showInstanceSelection ||
+          slot.instanceId === instanceId),
+    ),
+  );
+  const deadlinePassed = Boolean(
+    snapshot?.settings.applicationDeadline &&
+      Date.now() >= new Date(snapshot.settings.applicationDeadline).getTime(),
+  );
 
   return (
     <main className="customer-page">
@@ -281,7 +351,7 @@ export const LotteryPage = () => {
               <div className="grid min-h-72 place-items-center" role="status">
                 <LoaderCircle className="animate-spin" size={32} />
               </div>
-            ) : entry ? (
+            ) : entry && !editing ? (
               <div className="space-y-6">
                 <div className="flex items-center justify-between gap-4">
                   <span className="rounded-full bg-white/65 px-4 py-2 text-xs font-bold tracking-wider">
@@ -415,6 +485,23 @@ export const LotteryPage = () => {
                 )}
                 <dl className="entry-summary">
                   <div className="flex justify-between gap-4">
+                    <dt className="opacity-55">現在の応募設定</dt>
+                    <dd className="font-bold">
+                      {entry.preferenceMode === "omakase"
+                        ? "おまかせ"
+                        : `${activeSnapshot?.settings.instances.find((item) => item.id === entry.requestedInstanceId)?.label ?? "インスタンス未設定"}・${kindLabels[entry.kind]}`}
+                    </dd>
+                  </div>
+                  {entry.status === "winner" && entry.assignedInstanceId ? (
+                    <div className="flex justify-between gap-4">
+                      <dt className="opacity-55">当選枠</dt>
+                      <dd className="font-bold">
+                        {activeSnapshot?.settings.instances.find((item) => item.id === entry.assignedInstanceId)?.label}・
+                        {kindLabels[entry.assignedKind ?? entry.kind]}
+                      </dd>
+                    </div>
+                  ) : null}
+                  <div className="flex justify-between gap-4">
                     <dt className="opacity-55">応募項目</dt>
                     <dd className="font-bold">{kindLabels[entry.kind]}</dd>
                   </div>
@@ -434,10 +521,19 @@ export const LotteryPage = () => {
                   ) : null}
                 </dl>
                 {snapshot?.settings.state === "accepting" ? (
-                  <button
-                    className="flex w-full items-center justify-center gap-2 rounded-full border border-red-300 bg-white/50 px-5 py-3.5 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-50"
-                    disabled={submitting}
-                    onClick={async () => {
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <button
+                      className="rounded-full bg-[var(--color-accent)] px-5 py-3.5 text-sm font-semibold text-white disabled:opacity-50"
+                      disabled={submitting || deadlinePassed}
+                      onClick={() => setEditing(true)}
+                      type="button"
+                    >
+                      応募内容を変更
+                    </button>
+                    <button
+                      className="flex items-center justify-center gap-2 rounded-full border border-red-300 bg-white/50 px-5 py-3.5 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+                      disabled={submitting || deadlinePassed}
+                      onClick={async () => {
                       if (
                         await confirm({
                           title: "応募をキャンセルしますか？",
@@ -448,12 +544,18 @@ export const LotteryPage = () => {
                         })
                       )
                         void cancel();
-                    }}
-                    type="button"
-                  >
-                    <Trash2 size={17} />
-                    応募をキャンセル
-                  </button>
+                      }}
+                      type="button"
+                    >
+                      <Trash2 size={17} />
+                      応募をキャンセル
+                    </button>
+                  </div>
+                ) : null}
+                {entry.legacyAutoOmakase ? (
+                  <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-800">
+                    インスタンスが未設定だったため、おまかせに設定されています。応募締切までは、希望するインスタンスや席種に変更できます。
+                  </p>
                 ) : null}
               </div>
             ) : snapshot?.settings.state === "published" ? (
@@ -500,9 +602,7 @@ export const LotteryPage = () => {
                   <Ticket size={18} /> BAR MISAKI LOTTERY
                 </p>
                 <h1 className="hero-heading mb-4">
-                  BarMisaki
-                  <br />
-                  の抽選に応募する
+                  {editing ? "応募内容を変更する" : "BarMisakiの抽選に応募する"}
                 </h1>
                 <p className="mb-7 max-w-lg text-sm leading-relaxed opacity-70">
                   現在募集中の席を選び、代表者のX
@@ -516,13 +616,79 @@ export const LotteryPage = () => {
                     {notice}
                   </p>
                 ) : null}
-                {availableKinds.length ? (
+                {snapshot.settings.applicationDeadline ? (
+                  <p className="mb-5 rounded-2xl bg-white/55 px-4 py-3 text-sm font-semibold">
+                    応募締切：{new Date(snapshot.settings.applicationDeadline).toLocaleString("ja-JP")}
+                  </p>
+                ) : null}
+                <div className="mb-5">
+                  <p className="mb-2 text-sm font-semibold">申し込み人数</p>
+                  <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="申し込み人数">
+                    {([1, 2] as const).map((count) => (
+                      <button
+                        aria-checked={applicantCount === count}
+                        className={`seat-option ${applicantCount === count ? "is-selected" : ""}`}
+                        key={count}
+                        onClick={() => {
+                          setApplicantCount(count);
+                          if (count === 1) setCompanionVrcName("");
+                          if (count === 2) setPreferenceMode("specified");
+                        }}
+                        role="radio"
+                        type="button"
+                      >
+                        <strong>{count}人</strong>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {snapshot.settings.featureSettings.showOmakase &&
+                applicantCount === 1 ? (
+                  <button
+                    className={`mb-5 w-full rounded-2xl border p-4 text-left transition ${preferenceMode === "omakase" ? "border-violet-500 bg-violet-50" : "border-white/70 bg-white/50"}`}
+                    onClick={() =>
+                      setPreferenceMode((current) =>
+                        current === "omakase" ? "specified" : "omakase",
+                      )
+                    }
+                    type="button"
+                  >
+                    <strong>おまかせ</strong>
+                    <span className="mt-1 block text-sm opacity-65">
+                      1人応募限定。有効なすべての空き枠から抽選します。
+                    </span>
+                  </button>
+                ) : null}
+                {preferenceMode === "specified" &&
+                snapshot.settings.featureSettings.showInstanceSelection ? (
+                  <div className="mb-5 grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="希望インスタンス">
+                    {activeInstances.map((instance) => (
+                      <button
+                        aria-checked={instanceId === instance.id}
+                        className={`seat-option ${instanceId === instance.id ? "is-selected" : ""}`}
+                        key={instance.id}
+                        onClick={() => {
+                          setInstanceId(instance.id);
+                          const first = activeSlots.find((slot) => slot.instanceId === instance.id)?.kind;
+                          if (first) setKind(first);
+                        }}
+                        role="radio"
+                        type="button"
+                      >
+                        <strong>{instance.label}</strong>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {preferenceMode === "specified" &&
+                snapshot.settings.featureSettings.showKindSelection &&
+                selectableKinds.length ? (
                   <div
-                    className={`mb-6 grid gap-2 sm:gap-3 ${availableKinds.length === 1 ? "grid-cols-1" : availableKinds.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}
+                    className={`mb-6 grid gap-2 sm:gap-3 ${selectableKinds.length === 1 ? "grid-cols-1" : selectableKinds.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}
                     role="radiogroup"
                     aria-label="応募先"
                   >
-                    {availableKinds.map((option) => {
+                    {selectableKinds.map((option) => {
                       const selected = kind === option;
                       const Icon =
                         option === "counter"
@@ -544,17 +710,26 @@ export const LotteryPage = () => {
                             {kindLabels[option]}
                           </strong>
                           <span className="mt-1 block text-xs opacity-70">
-                            {option === "counter" ? "2名1組" : "1〜2名1組"}
+                            {(() => {
+                              const slot = activeSlots.find(
+                                (item) =>
+                                  item.kind === option &&
+                                  (!snapshot.settings.featureSettings.showInstanceSelection || item.instanceId === instanceId),
+                              );
+                              return slot
+                                ? `${slot.minPeople}〜${slot.maxPeople}人で応募可能`
+                                : "現在応募できません";
+                            })()}
                           </span>
                         </button>
                       );
                     })}
                   </div>
-                ) : (
+                ) : preferenceMode === "specified" ? (
                   <p className="mb-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
                     現在選択できる募集項目がありません。
                   </p>
-                )}
+                ) : null}
                 <div className="space-y-4">
                   <label className="block text-sm font-semibold">
                     代表者のX ID
@@ -582,25 +757,20 @@ export const LotteryPage = () => {
                       value={representativeVrcName}
                     />
                   </label>
-                  <label className="block text-sm font-semibold">
+                  {applicantCount === 2 ? <label className="block text-sm font-semibold">
                     同行者のVRC名
-                    {kind === "counter" ? (
-                      <span className="required-label">必須</span>
-                    ) : (
-                      <span className="ml-2 text-xs font-normal opacity-50">
-                        1名で応募する場合は空欄
-                      </span>
-                    )}
+                    <span className="required-label">必須</span>
                     <input
                       className="mt-2 w-full rounded-2xl border border-white/70 bg-white/65 px-4 py-3.5 outline-none transition focus:border-[var(--color-accent)]"
                       maxLength={32}
-                      onChange={(event) =>
-                        setCompanionVrcName(event.target.value)
-                      }
+                      onChange={(event) => {
+                        setCompanionVrcName(event.target.value);
+                        if (event.target.value) setPreferenceMode("specified");
+                      }}
                       placeholder="Partner_VRC"
                       value={companionVrcName}
                     />
-                  </label>
+                  </label> : null}
                 </div>
                 {error ? (
                   <p
@@ -612,14 +782,18 @@ export const LotteryPage = () => {
                 ) : null}
                 <motion.button
                   className="mt-6 flex w-full items-center justify-between rounded-full bg-[var(--color-accent)] px-6 py-[17px] font-semibold text-white shadow-[0_4px_24px_rgba(115,66,226,0.28)] disabled:opacity-55"
-                  disabled={submitting || !availableKinds.length}
+                  disabled={submitting || deadlinePassed || !activeSlots.length}
                   onClick={() => void submit()}
                   type="button"
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
                   <span>
-                    {submitting ? "応募を送信中..." : "この内容で応募する"}
+                    {submitting
+                      ? "保存中..."
+                      : editing
+                        ? "変更内容を保存する"
+                        : "この内容で応募する"}
                   </span>
                   <Ticket size={20} />
                 </motion.button>

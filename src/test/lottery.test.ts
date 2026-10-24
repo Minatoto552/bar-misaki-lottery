@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { cancelLotteryEntry, closeLottery, ensureDeviceToken, getAdminLotterySnapshot, getPublicLotterySnapshot, loginAdmin, publishLotteryResults, resetLottery, runLottery, submitLotteryEntry, updateAvailableLotteryKinds } from '../lib/lottery-api';
+import { cancelLotteryEntry, closeLottery, ensureDeviceToken, getAdminLotterySnapshot, getPublicLotterySnapshot, loginAdmin, publishLotteryResults, resetLottery, runLottery, submitLotteryEntry, updateAvailableLotteryKinds, updateLotteryConfiguration } from '../lib/lottery-api';
 
 const token = (suffix: string) => `00000000-0000-4000-8000-000000000000-00000000-0000-4000-8000-${suffix.padStart(12, '0')}`;
 
 describe('Bar Misaki lottery demo flow', () => {
   beforeEach(() => { localStorage.clear(); sessionStorage.clear(); });
 
-  it('requires a companion VRC name for a counter entry', async () => {
-    await expect(submitLotteryEntry({ kind: 'counter', representativeId: '@one', representativeVrcName: 'One VRC', token: token('1') })).rejects.toThrow('同行者');
+  it('uses the configured minimum people instead of a fixed seat rule', async () => {
+    await loginAdmin('3331');
+    const current = await getAdminLotterySnapshot();
+    await updateLotteryConfiguration({ applicationDeadline: null, instances: current.settings.instances, featureSettings: current.settings.featureSettings, recruitmentSlots: current.settings.recruitmentSlots.map((slot) => slot.id === 'instance1:counter' ? {...slot, minPeople: 2, maxPeople: 2} : slot) });
+    await expect(submitLotteryEntry({ kind: 'counter', representativeId: '@one', representativeVrcName: 'One VRC', token: token('1') })).rejects.toThrow('2〜2人');
   });
 
   it('uses only the representative X ID for duplicate detection', async () => {
@@ -42,6 +45,8 @@ describe('Bar Misaki lottery demo flow', () => {
     await submitLotteryEntry({ kind: 'counter', representativeId: '@counter', representativeVrcName: 'Counter', companionVrcName: 'Counter Partner', token: token('5') });
     await submitLotteryEntry({ kind: 'table', representativeId: '@table', representativeVrcName: 'Table', token: token('6') });
     await loginAdmin('3331');
+    const current = await getAdminLotterySnapshot();
+    await updateLotteryConfiguration({ applicationDeadline: null, instances: current.settings.instances, featureSettings: current.settings.featureSettings, recruitmentSlots: current.settings.recruitmentSlots.map((slot) => ({...slot, enabled: slot.id === 'instance1:counter', capacity: slot.id === 'instance1:counter' ? 1 : 0})) });
     await closeLottery();
     await runLottery({ enabledKinds: ['counter'], winnerSlots: { counter: 1, private: 0, table: 1 } });
     const admin = await getAdminLotterySnapshot();
@@ -49,7 +54,7 @@ describe('Bar Misaki lottery demo flow', () => {
     expect(admin.entries.find((entry) => entry.kind === 'table')?.status).toBe('pending');
     expect(admin.settings.tableWinnerSlots).toBe(0);
     await publishLotteryResults();
-    expect((await getPublicLotterySnapshot(token('6'))).entry?.status).toBe('pending');
+    expect((await getPublicLotterySnapshot(token('6'))).entry?.status).toBe('loser');
   });
 
   it('hides results until publication, then exposes the predetermined result', async () => {

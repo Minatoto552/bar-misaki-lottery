@@ -35,7 +35,7 @@ describe('redesigned lottery experience', () => {
   it('shows the application without the removed video', async () => {
     await render(<LotteryPage />);
     expect(document.querySelector('video')).toBeNull();
-    expect(document.querySelectorAll('.seat-option')).toHaveLength(3);
+    expect(document.querySelectorAll('.seat-option').length).toBeGreaterThanOrEqual(3);
     expect(document.querySelectorAll('.gallery-coin')).toHaveLength(9);
   });
   it('requires typed confirmation before a reset action', async () => {

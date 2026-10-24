@@ -69,4 +69,31 @@ describe('shared Sites backend', () => {
     expect((await post(env, 'runLottery', { enabledKinds: ['private'], winnerSlots: { counter: 0, private: 1, table: 0 } }, session)).status).toBe(200);
     expect((await post(env, 'getAdminLottery', {}, session)).body.settings.state).toBe('drawn');
   });
+
+  it('keeps legacy applicants and draws by instance, seat and people limits', async () => {
+    const env = { DB: new MemoryD1(), ADMIN_SHARED_PASSWORD: '3331' };
+    const login = await post(env, 'adminLogin', { password: '3331' });
+    const session = login.body.sessionToken;
+    const initial = (await post(env, 'getAdminLottery', {}, session)).body;
+    const instances = initial.settings.instances.map((item) => ({ ...item, visible: item.id !== 'instance3', enabled: item.id !== 'instance3' }));
+    const recruitmentSlots = initial.settings.recruitmentSlots.map((slot) => ({
+      ...slot,
+      enabled: slot.id === 'instance1:counter' || slot.id === 'instance2:table',
+      capacity: slot.id === 'instance1:counter' || slot.id === 'instance2:table' ? 1 : 0,
+      minPeople: slot.id === 'instance1:counter' ? 2 : 1,
+      maxPeople: 2,
+    }));
+    expect((await post(env, 'updateLotteryConfiguration', { applicationDeadline: null, instances, recruitmentSlots, featureSettings: initial.settings.featureSettings }, session)).status).toBe(200);
+    expect((await post(env, 'submitLotteryEntry', { kind: 'counter', instanceId: 'instance1', preferenceMode: 'specified', representativeId: '@solo', representativeVrcName: 'Solo', token: 'e'.repeat(64) })).status).toBe(400);
+    expect((await post(env, 'submitLotteryEntry', { kind: 'counter', instanceId: 'instance1', preferenceMode: 'specified', representativeId: '@pair', representativeVrcName: 'Pair', companionVrcName: 'Partner', token: 'f'.repeat(64) })).status).toBe(200);
+    expect((await post(env, 'submitLotteryEntry', { kind: 'table', instanceId: 'instance2', preferenceMode: 'specified', representativeId: '@table2', representativeVrcName: 'Table', token: '1'.repeat(64) })).status).toBe(200);
+    expect((await post(env, 'submitLotteryEntry', { kind: 'private', preferenceMode: 'omakase', representativeId: '@auto', representativeVrcName: 'Auto', token: '2'.repeat(64) })).status).toBe(200);
+    expect((await post(env, 'closeLottery', {}, session)).status).toBe(200);
+    expect((await post(env, 'runLottery', {}, session)).status).toBe(200);
+    const drawn = (await post(env, 'getAdminLottery', {}, session)).body;
+    const winners = drawn.entries.filter((entry) => entry.status === 'winner');
+    expect(winners).toHaveLength(2);
+    expect(winners.filter((entry) => entry.assignedInstanceId === 'instance1' && entry.assignedKind === 'counter')).toHaveLength(1);
+    expect(winners.filter((entry) => entry.assignedInstanceId === 'instance2' && entry.assignedKind === 'table')).toHaveLength(1);
+  });
 });

@@ -17,6 +17,33 @@ export const entryStatuses = [
 export type LotteryKind = (typeof lotteryKinds)[number];
 export type LotteryState = (typeof lotteryStates)[number];
 export type EntryStatus = (typeof entryStatuses)[number];
+export const instanceIds = ["instance1", "instance2", "instance3"] as const;
+export type InstanceId = (typeof instanceIds)[number];
+export type PreferenceMode = "specified" | "omakase";
+
+export interface LotteryInstance {
+  id: InstanceId;
+  label: string;
+  visible: boolean;
+  enabled: boolean;
+}
+
+export interface RecruitmentSlot {
+  id: string;
+  instanceId: InstanceId;
+  kind: LotteryKind;
+  capacity: number;
+  minPeople: number;
+  maxPeople: number;
+  enabled: boolean;
+}
+
+export interface LotteryFeatureSettings {
+  showInstanceSelection: boolean;
+  showKindSelection: boolean;
+  showOmakase: boolean;
+  kindVisibility: Record<LotteryKind, boolean>;
+}
 
 export interface LotterySettings {
   roundId: string;
@@ -31,6 +58,11 @@ export interface LotterySettings {
   vacantTableSlots: number;
   publishedAt: string | null;
   lastUpdatedAt: string;
+  applicationDeadline: string | null;
+  instances: LotteryInstance[];
+  recruitmentSlots: RecruitmentSlot[];
+  featureSettings: LotteryFeatureSettings;
+  vacantSlotCounts: Record<string, number>;
 }
 
 export interface LotteryEntry {
@@ -51,6 +83,11 @@ export interface LotteryEntry {
   drawnAt: string | null;
   excludedAt: string | null;
   confirmedAt: string | null;
+  preferenceMode: PreferenceMode;
+  requestedInstanceId: InstanceId | null;
+  assignedInstanceId: InstanceId | null;
+  assignedKind: LotteryKind | null;
+  legacyAutoOmakase: boolean;
 }
 
 export interface LotteryAuditLog {
@@ -71,17 +108,34 @@ export interface AdminLotterySnapshot {
 export interface PublicLotterySnapshot {
   settings: Pick<
     LotterySettings,
-    "roundId" | "state" | "availableKinds" | "drawnKinds" | "lastUpdatedAt"
+    | "roundId"
+    | "state"
+    | "availableKinds"
+    | "drawnKinds"
+    | "lastUpdatedAt"
+    | "applicationDeadline"
+    | "instances"
+    | "recruitmentSlots"
+    | "featureSettings"
   >;
   entry: Omit<LotteryEntry, "normalizedIds" | "previousWinnerCode"> | null;
 }
 
 export interface SubmitLotteryInput {
   kind: LotteryKind;
+  instanceId?: InstanceId;
+  preferenceMode?: PreferenceMode;
   representativeId: string;
   representativeVrcName: string;
   companionVrcName?: string;
   token: string;
+}
+
+export interface LotteryConfigurationInput {
+  applicationDeadline: string | null;
+  instances: LotteryInstance[];
+  recruitmentSlots: RecruitmentSlot[];
+  featureSettings: LotteryFeatureSettings;
 }
 
 export interface LotteryDrawInput {

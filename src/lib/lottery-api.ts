@@ -5,7 +5,9 @@ import type {
   AdminLotterySnapshot,
   LotteryAuditLog,
   LotteryEntry,
+  LotteryConfigurationInput,
   LotteryDrawInput,
+  InstanceId,
   LotteryKind,
   LotterySettings,
   PublicLotterySnapshot,
@@ -14,7 +16,6 @@ import type {
 import {
   normalizeXIdForComparison,
   submitLotterySchema,
-  validateWinnerSlots,
 } from "../../shared/validation";
 import {
   firebaseServices,
@@ -38,6 +39,25 @@ interface DemoDatabase {
 
 const nowIso = () => new Date().toISOString();
 const newRoundId = () => `round-${crypto.randomUUID()}`;
+const defaultInstances = () =>
+  ([1, 2, 3] as const).map((number) => ({
+    id: `instance${number}` as InstanceId,
+    label: `インスタンス${number}`,
+    visible: number === 1,
+    enabled: number === 1,
+  }));
+const defaultSlots = () =>
+  defaultInstances().flatMap((instance) =>
+    (["counter", "private", "table"] as LotteryKind[]).map((kind) => ({
+      id: `${instance.id}:${kind}`,
+      instanceId: instance.id,
+      kind,
+      capacity: instance.id === "instance1" ? 1 : 0,
+      minPeople: 1,
+      maxPeople: 2,
+      enabled: instance.id === "instance1",
+    })),
+  );
 
 const initialDatabase = (): DemoDatabase => ({
   settings: {
@@ -53,6 +73,16 @@ const initialDatabase = (): DemoDatabase => ({
     vacantTableSlots: 0,
     publishedAt: null,
     lastUpdatedAt: nowIso(),
+    applicationDeadline: null,
+    instances: defaultInstances(),
+    recruitmentSlots: defaultSlots(),
+    featureSettings: {
+      showInstanceSelection: true,
+      showKindSelection: true,
+      showOmakase: true,
+      kindVisibility: { counter: true, private: true, table: true },
+    },
+    vacantSlotCounts: {},
   },
   entries: [],
   audits: [],
@@ -72,6 +102,19 @@ const loadDemo = (): DemoDatabase => {
     parsed.settings.vacantTableSlots ??= 0;
     parsed.settings.availableKinds ??= ["counter", "private", "table"];
     parsed.settings.drawnKinds ??= ["counter", "private"];
+    parsed.settings.applicationDeadline ??= null;
+    parsed.settings.instances ??= defaultInstances();
+    parsed.settings.recruitmentSlots ??= defaultSlots();
+    parsed.settings.recruitmentSlots = parsed.settings.recruitmentSlots.map(
+      (slot) => ({ ...slot, minPeople: slot.minPeople ?? 1, maxPeople: slot.maxPeople ?? 2 }),
+    );
+    parsed.settings.featureSettings ??= {
+      showInstanceSelection: true,
+      showKindSelection: true,
+      showOmakase: true,
+      kindVisibility: { counter: true, private: true, table: true },
+    };
+    parsed.settings.vacantSlotCounts ??= {};
     parsed.entries = parsed.entries.map((entry) => {
       const legacy = entry as LotteryEntry & { companionId?: string | null };
       return {
@@ -81,6 +124,12 @@ const loadDemo = (): DemoDatabase => {
         companionVrcName: entry.companionVrcName ?? legacy.companionId ?? null,
         normalizedIds: [normalizeXIdForComparison(entry.representativeId)],
         confirmedAt: entry.confirmedAt ?? null,
+        preferenceMode: entry.preferenceMode ?? "omakase",
+        requestedInstanceId: entry.requestedInstanceId ?? null,
+        assignedInstanceId: entry.assignedInstanceId ?? null,
+        assignedKind: entry.assignedKind ?? null,
+        legacyAutoOmakase:
+          entry.legacyAutoOmakase ?? entry.requestedInstanceId == null,
       };
     });
     return parsed;
@@ -164,6 +213,98 @@ const choose = <T>(items: T[], count: number): T[] => {
   return selected;
 };
 
+const allocateConfiguredWinners = (
+  entries: LotteryEntry[],
+  settings: LotterySettings,
+  lockedIds: Set<string> = new Set(),
+) => {
+  const activeInstances = new Set(
+    settings.instances
+      .filter((instance) => instance.enabled && instance.visible)
+      .map((instance) => instance.id),
+  );
+  const slots = settings.recruitmentSlots.filter(
+    (slot) =>
+      slot.enabled &&
+      slot.capacity > 0 &&
+      activeInstances.has(slot.instanceId) &&
+      settings.featureSettings.kindVisibility[slot.kind],
+  );
+  if (!slots.length) throw new Error("有効な募集枠がありません");
+  const assignments = new Map<
+    string,
+    { instanceId: InstanceId; kind: LotteryKind }
+  >();
+  const remaining = new Map(slots.map((slot) => [slot.id, slot.capacity]));
+  for (const entry of entries.filter(
+    (item) => lockedIds.has(item.id) && item.status === "winner",
+  )) {
+    if (!entry.assignedInstanceId || !entry.assignedKind) continue;
+    const slotId = `${entry.assignedInstanceId}:${entry.assignedKind}`;
+    if (!remaining.has(slotId) || remaining.get(slotId)! <= 0)
+      throw new Error(`${entry.entryNumber}の当選確定枠が現在の募集設定と一致しません`);
+    remaining.set(slotId, remaining.get(slotId)! - 1);
+    assignments.set(entry.id, {
+      instanceId: entry.assignedInstanceId,
+      kind: entry.assignedKind,
+    });
+  }
+  for (const slot of slots) {
+    const candidates = entries.filter(
+      (entry) =>
+        !lockedIds.has(entry.id) &&
+        entry.status !== "excluded" &&
+        entry.preferenceMode === "specified" &&
+        entry.requestedInstanceId === slot.instanceId &&
+        entry.kind === slot.kind &&
+        entry.peopleCount >= slot.minPeople &&
+        entry.peopleCount <= slot.maxPeople,
+    );
+    for (const entry of choose(candidates, remaining.get(slot.id) ?? 0)) {
+      assignments.set(entry.id, {
+        instanceId: slot.instanceId,
+        kind: slot.kind,
+      });
+      remaining.set(slot.id, remaining.get(slot.id)! - 1);
+    }
+  }
+  const openAssignments = slots.flatMap((slot) =>
+    Array.from({ length: remaining.get(slot.id) ?? 0 }, () => slot),
+  );
+  const omakase = choose(
+    entries.filter(
+      (entry) =>
+        !lockedIds.has(entry.id) &&
+        entry.status !== "excluded" &&
+        entry.preferenceMode === "omakase",
+    ),
+    entries.filter(
+      (entry) =>
+        !lockedIds.has(entry.id) &&
+        entry.status !== "excluded" &&
+        entry.preferenceMode === "omakase",
+    ).length,
+  );
+  for (const entry of omakase) {
+    if (!openAssignments.length) break;
+    const eligibleIndexes = openAssignments
+      .map((slot, index) => ({ slot, index }))
+      .filter(
+        ({ slot }) =>
+          entry.peopleCount >= slot.minPeople &&
+          entry.peopleCount <= slot.maxPeople,
+      );
+    if (!eligibleIndexes.length) continue;
+    const selected = eligibleIndexes[randomIndex(eligibleIndexes.length)]!;
+    const slot = openAssignments.splice(selected.index, 1)[0]!;
+    assignments.set(entry.id, {
+      instanceId: slot.instanceId,
+      kind: slot.kind,
+    });
+  }
+  return { assignments, slots };
+};
+
 const winnerCode = (usedCodes: Set<string> = new Set()): string => {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -200,43 +341,98 @@ export const submitLotteryEntry = async (
   const database = loadDemo();
   if (database.settings.state !== "accepting")
     throw new Error("現在は応募を受け付けていません");
-  if (!database.settings.availableKinds.includes(parsed.data.kind))
+  if (
+    database.settings.applicationDeadline &&
+    Date.now() >= new Date(database.settings.applicationDeadline).getTime()
+  )
+    throw new Error("応募締切時刻を過ぎています");
+  const preferenceMode = parsed.data.preferenceMode ?? "specified";
+  const requestedInstanceId = parsed.data.instanceId ?? "instance1";
+  const slot = database.settings.recruitmentSlots.find(
+    (candidate) =>
+      candidate.instanceId === requestedInstanceId &&
+      candidate.kind === parsed.data.kind,
+  );
+  if (preferenceMode === "omakase") {
+    if (!database.settings.featureSettings.showOmakase)
+      throw new Error("おまかせ応募は現在利用できません");
+    if (parsed.data.companionVrcName)
+      throw new Error("おまかせは1人応募の場合のみ選択できます");
+  } else if (
+    !slot ||
+    !slot.enabled ||
+    slot.capacity <= 0 ||
+    !database.settings.instances.find(
+      (instance) =>
+        instance.id === slot.instanceId && instance.enabled && instance.visible,
+    ) ||
+    !database.settings.featureSettings.kindVisibility[slot.kind]
+  )
+    throw new Error("選択した募集枠は現在受け付けていません");
+  const peopleCount = parsed.data.companionVrcName ? 2 : 1;
+  if (
+    preferenceMode === "specified" &&
+    slot &&
+    (peopleCount < slot.minPeople || peopleCount > slot.maxPeople)
+  )
+    throw new Error(
+      `${slot.minPeople}〜${slot.maxPeople}人で応募できる募集枠です`,
+    );
+  if (
+    preferenceMode === "specified" &&
+    !database.settings.availableKinds.includes(parsed.data.kind)
+  )
     throw new Error("この募集項目は現在受け付けていません");
+  const existingId = database.tokenEntryMap[parsed.data.token];
+  const existing = database.entries.find(
+    (entry) =>
+      entry.id === existingId && entry.roundId === database.settings.roundId,
+  );
   const normalizedIds = [
     normalizeXIdForComparison(parsed.data.representativeId),
   ];
   const used = new Set(
     database.entries
-      .filter((entry) => entry.roundId === database.settings.roundId)
+      .filter(
+        (entry) =>
+          entry.roundId === database.settings.roundId && entry.id !== existingId,
+      )
       .flatMap((entry) => entry.normalizedIds),
   );
   if (normalizedIds.some((id) => used.has(id)))
     throw new Error("このX IDはすでに応募されています");
-  if (database.tokenEntryMap[parsed.data.token])
-    throw new Error("この端末からはすでに応募済みです");
-
-  const id = `entry-${crypto.randomUUID()}`;
+  const id = existing?.id ?? `entry-${crypto.randomUUID()}`;
   const timestamp = nowIso();
   const entry: LotteryEntry = {
     id,
     roundId: database.settings.roundId,
-    entryNumber: `MSK-${String(database.entries.filter((item) => item.roundId === database.settings.roundId).length + 1).padStart(4, "0")}`,
+    entryNumber: existing?.entryNumber ?? `MSK-${String(database.entries.filter((item) => item.roundId === database.settings.roundId).length + 1).padStart(4, "0")}`,
     kind: parsed.data.kind,
     representativeId: parsed.data.representativeId,
     representativeVrcName: parsed.data.representativeVrcName,
     companionVrcName: parsed.data.companionVrcName ?? null,
     normalizedIds,
-    peopleCount: parsed.data.companionVrcName ? 2 : 1,
-    status: "pending",
+    peopleCount,
+    status: existing?.status ?? "pending",
     winnerCode: null,
     previousWinnerCode: null,
-    createdAt: timestamp,
+    createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
     drawnAt: null,
     excludedAt: null,
     confirmedAt: null,
+    preferenceMode,
+    requestedInstanceId:
+      preferenceMode === "specified" ? requestedInstanceId : null,
+    assignedInstanceId: null,
+    assignedKind: null,
+    legacyAutoOmakase: false,
   };
-  database.entries.push(entry);
+  if (existing)
+    database.entries = database.entries.map((item) =>
+      item.id === existing.id ? entry : item,
+    );
+  else database.entries.push(entry);
   database.tokenEntryMap[parsed.data.token] = id;
   database.settings.lastUpdatedAt = timestamp;
   saveDemo(database);
@@ -275,6 +471,10 @@ export const getPublicLotterySnapshot = async (
       availableKinds: database.settings.availableKinds,
       drawnKinds: database.settings.drawnKinds,
       lastUpdatedAt: database.settings.lastUpdatedAt,
+      applicationDeadline: database.settings.applicationDeadline,
+      instances: database.settings.instances,
+      recruitmentSlots: database.settings.recruitmentSlots,
+      featureSettings: database.settings.featureSettings,
     },
     entry: publicEntry,
   };
@@ -304,6 +504,10 @@ export const lookupWinnerCode = async (
       availableKinds: database.settings.availableKinds,
       drawnKinds: database.settings.drawnKinds,
       lastUpdatedAt: database.settings.lastUpdatedAt,
+      applicationDeadline: database.settings.applicationDeadline,
+      instances: database.settings.instances,
+      recruitmentSlots: database.settings.recruitmentSlots,
+      featureSettings: database.settings.featureSettings,
     },
     entry: {
       ...rest,
@@ -484,6 +688,89 @@ export const updateAvailableLotteryKinds = async (
   saveDemo(database);
 };
 
+export const updateLotteryConfiguration = async (
+  input: LotteryConfigurationInput,
+): Promise<void> => {
+  if (!isDemoMode) {
+    await call("updateLotteryConfiguration", input);
+    return;
+  }
+  let database = loadDemo();
+  if (database.settings.state !== "accepting")
+    throw new Error("設定は応募受付中のみ変更できます");
+  const instanceIds = new Set(input.instances.map((instance) => instance.id));
+  if (input.instances.length !== 3 || instanceIds.size !== 3)
+    throw new Error("インスタンス設定を確認してください");
+  for (const slot of input.recruitmentSlots) {
+    if (!instanceIds.has(slot.instanceId))
+      throw new Error("募集枠のインスタンスが不正です");
+    if (!Number.isInteger(slot.capacity) || slot.capacity < 0)
+      throw new Error("募集数は0以上の整数で入力してください");
+    if (
+      !Number.isInteger(slot.minPeople) ||
+      !Number.isInteger(slot.maxPeople) ||
+      slot.minPeople < 1 ||
+      slot.maxPeople < slot.minPeople ||
+      slot.maxPeople > 2
+    )
+      throw new Error("申し込み人数は1〜2人の範囲で設定してください");
+  }
+  database.settings.applicationDeadline = input.applicationDeadline;
+  database.settings.instances = input.instances;
+  database.settings.recruitmentSlots = input.recruitmentSlots;
+  database.settings.featureSettings = input.featureSettings;
+  database.settings.availableKinds = (["counter", "private", "table"] as LotteryKind[]).filter(
+    (kind) =>
+      input.featureSettings.kindVisibility[kind] &&
+      input.recruitmentSlots.some(
+        (slot) => slot.kind === kind && slot.enabled && slot.capacity > 0,
+      ),
+  );
+  database.settings.lastUpdatedAt = nowIso();
+  database = withAudit(
+    database,
+    "インスタンス・募集枠設定更新",
+    "all",
+    `${input.recruitmentSlots.filter((slot) => slot.enabled && slot.capacity > 0).length}枠を有効化`,
+  );
+  saveDemo(database);
+};
+
+export const adminUpdateLotteryEntry = async (
+  entryId: string,
+  input: Pick<SubmitLotteryInput, "kind" | "instanceId" | "preferenceMode">,
+): Promise<void> => {
+  if (!isDemoMode) {
+    await call("adminUpdateLotteryEntry", { entryId, ...input });
+    return;
+  }
+  let database = loadDemo();
+  const entry = database.entries.find((item) => item.id === entryId);
+  if (!entry) throw new Error("応募が見つかりません");
+  const timestamp = nowIso();
+  database.entries = database.entries.map((item) =>
+    item.id === entryId
+      ? {
+          ...item,
+          kind: input.kind,
+          preferenceMode: input.preferenceMode ?? "specified",
+          requestedInstanceId:
+            input.preferenceMode === "omakase" ? null : input.instanceId ?? null,
+          legacyAutoOmakase: false,
+          updatedAt: timestamp,
+        }
+      : item,
+  );
+  database.settings.lastUpdatedAt = timestamp;
+  database = withAudit(
+    database,
+    "応募条件管理者修正",
+    entry.kind,
+    `${entry.entryNumber}の応募条件を修正`,
+  );
+  saveDemo(database);
+};
+
 export const closeLottery = async (): Promise<void> => {
   if (!isDemoMode) {
     await call("closeLottery", {});
@@ -518,44 +805,14 @@ export const runLottery = async ({
   const current = database.entries.filter(
     (entry) => entry.roundId === database.settings.roundId,
   );
-  if (!enabledKinds.length)
-    throw new Error("抽選対象を1つ以上選択してください");
-  const entriesByKind = Object.fromEntries(
-    (["counter", "private", "table"] as LotteryKind[]).map((kind) => [
-      kind,
-      current.filter((entry) => entry.kind === kind),
-    ]),
-  ) as Record<LotteryKind, LotteryEntry[]>;
-  const effectiveSlots = Object.fromEntries(
-    (["counter", "private", "table"] as LotteryKind[]).map((kind) => [
-      kind,
-      enabledKinds.includes(kind) ? winnerSlots[kind] : 0,
-    ]),
-  ) as Record<LotteryKind, number>;
-  const error = (["counter", "private", "table"] as LotteryKind[])
-    .map((kind) =>
-      validateWinnerSlots(
-        kind,
-        effectiveSlots[kind],
-        entriesByKind[kind].length,
-      ),
-    )
-    .find(Boolean);
-  if (error) throw new Error(error);
+  const { assignments, slots } = allocateConfiguredWinners(
+    current,
+    database.settings,
+  );
   database.settings.state = "drawing";
   saveDemo(database);
   const timestamp = nowIso();
-  const winnerIds = new Set([
-    ...choose(entriesByKind.counter, effectiveSlots.counter).map(
-      (entry) => entry.id,
-    ),
-    ...choose(entriesByKind.private, effectiveSlots.private).map(
-      (entry) => entry.id,
-    ),
-    ...choose(entriesByKind.table, effectiveSlots.table).map(
-      (entry) => entry.id,
-    ),
-  ]);
+  const winnerIds = new Set(assignments.keys());
   database = loadDemo();
   const issuedCodes = new Set<string>();
   database.entries = database.entries.map((entry) =>
@@ -568,15 +825,17 @@ export const runLottery = async ({
           drawnAt: timestamp,
           confirmedAt: null,
           updatedAt: timestamp,
+          assignedInstanceId: assignments.get(entry.id)?.instanceId ?? null,
+          assignedKind: assignments.get(entry.id)?.kind ?? null,
         },
   );
   database.settings = {
     ...database.settings,
     state: "drawn",
-    drawnKinds: [...enabledKinds],
-    counterWinnerSlots: effectiveSlots.counter,
-    privateWinnerSlots: effectiveSlots.private,
-    tableWinnerSlots: effectiveSlots.table,
+    drawnKinds: [...new Set(slots.map((slot) => slot.kind))],
+    counterWinnerSlots: slots.filter((slot) => slot.kind === "counter").reduce((sum, slot) => sum + slot.capacity, 0),
+    privateWinnerSlots: slots.filter((slot) => slot.kind === "private").reduce((sum, slot) => sum + slot.capacity, 0),
+    tableWinnerSlots: slots.filter((slot) => slot.kind === "table").reduce((sum, slot) => sum + slot.capacity, 0),
     vacantCounterSlots: 0,
     vacantPrivateSlots: 0,
     vacantTableSlots: 0,
@@ -592,8 +851,8 @@ export const runLottery = async ({
     database,
     "抽選実行",
     "all",
-    enabledKinds
-      .map((kind) => `${labels[kind]}${effectiveSlots[kind]}組`)
+    slots
+      .map((slot) => `${slot.instanceId}/${labels[slot.kind]}${slot.capacity}組`)
       .join("、") + "を抽選",
   );
   saveDemo(database);
@@ -625,41 +884,15 @@ export const redrawLottery = async (
   const current = database.entries.filter(
     (entry) => entry.roundId === database.settings.roundId,
   );
-  const slots: Record<LotteryKind, number> = {
-    counter: database.settings.counterWinnerSlots,
-    private: database.settings.privateWinnerSlots,
-    table: database.settings.tableWinnerSlots,
-  };
-  const candidates = Object.fromEntries(
-    (["counter", "private", "table"] as LotteryKind[]).map((kind) => [
-      kind,
-      current.filter(
-        (entry) => entry.kind === kind && entry.status !== "excluded",
-      ),
-    ]),
-  ) as Record<LotteryKind, LotteryEntry[]>;
   const locked = current.filter(
     (entry) => locks.includes(entry.id) && entry.status === "winner",
   );
-  for (const kind of ["counter", "private", "table"] as LotteryKind[]) {
-    const lockedCount = locked.filter((entry) => entry.kind === kind).length;
-    if (lockedCount > slots[kind] || slots[kind] > candidates[kind].length)
-      throw new Error(`${kind}の当選確定枠・再抽選枠を確認してください`);
-  }
-  const winnerIds = new Set(
-    (["counter", "private", "table"] as LotteryKind[]).flatMap((kind) =>
-      database.settings.drawnKinds.includes(kind)
-        ? [
-            ...locked.filter((entry) => entry.kind === kind),
-            ...choose(
-              candidates[kind].filter((entry) => !locks.includes(entry.id)),
-              slots[kind] -
-                locked.filter((entry) => entry.kind === kind).length,
-            ),
-          ].map((entry) => entry.id)
-        : [],
-    ),
+  const { assignments } = allocateConfiguredWinners(
+    current,
+    database.settings,
+    new Set(locks),
   );
+  const winnerIds = new Set(assignments.keys());
   const issuedCodes = new Set<string>(
     locked
       .map((entry) => entry.winnerCode)
@@ -681,6 +914,10 @@ export const redrawLottery = async (
           confirmedAt: null,
           drawnAt: timestamp,
           updatedAt: timestamp,
+          assignedInstanceId:
+            assignments.get(entry.id)?.instanceId ?? entry.assignedInstanceId,
+          assignedKind:
+            assignments.get(entry.id)?.kind ?? entry.assignedKind,
         },
   );
   database.settings.vacantCounterSlots = 0;
@@ -718,6 +955,12 @@ export const excludeWinners = async (entryIds: string[]): Promise<void> => {
         }
       : entry,
   );
+  for (const entry of selected) {
+    if (!entry.assignedInstanceId || !entry.assignedKind) continue;
+    const slotId = `${entry.assignedInstanceId}:${entry.assignedKind}`;
+    database.settings.vacantSlotCounts[slotId] =
+      (database.settings.vacantSlotCounts[slotId] ?? 0) + 1;
+  }
   database.settings.vacantCounterSlots += selected.filter(
     (entry) => entry.kind === "counter",
   ).length;
@@ -760,6 +1003,14 @@ export const undoExclusions = async (entryIds: string[]): Promise<void> => {
         }
       : entry,
   );
+  for (const entry of selected) {
+    if (!entry.assignedInstanceId || !entry.assignedKind) continue;
+    const slotId = `${entry.assignedInstanceId}:${entry.assignedKind}`;
+    database.settings.vacantSlotCounts[slotId] = Math.max(
+      0,
+      (database.settings.vacantSlotCounts[slotId] ?? 0) - 1,
+    );
+  }
   database.settings.vacantCounterSlots = Math.max(
     0,
     database.settings.vacantCounterSlots -
@@ -791,17 +1042,37 @@ export const redrawVacancies = async (): Promise<void> => {
   const current = database.entries.filter(
     (entry) => entry.roundId === database.settings.roundId,
   );
-  const selectFor = (kind: LotteryKind, requested: number) => {
+  const replacements: LotteryEntry[] = [];
+  const assigned = new Map<string, { instanceId: InstanceId; kind: LotteryKind }>();
+  for (const [slotId, requested] of Object.entries(database.settings.vacantSlotCounts)) {
+    const slot = database.settings.recruitmentSlots.find((item) => item.id === slotId);
+    if (!slot || requested <= 0) continue;
     const candidates = current.filter(
-      (entry) => entry.kind === kind && entry.status === "pending",
+      (entry) =>
+        entry.status === "pending" &&
+        !replacements.some((item) => item.id === entry.id) &&
+        entry.peopleCount >= slot.minPeople &&
+        entry.peopleCount <= slot.maxPeople &&
+        (entry.preferenceMode === "omakase" ||
+          (entry.requestedInstanceId === slot.instanceId && entry.kind === slot.kind)),
     );
-    return choose(candidates, Math.min(requested, candidates.length));
-  };
-  const replacements = [
-    ...selectFor("counter", database.settings.vacantCounterSlots),
-    ...selectFor("private", database.settings.vacantPrivateSlots),
-    ...selectFor("table", database.settings.vacantTableSlots),
-  ];
+    for (const entry of choose(candidates, Math.min(requested, candidates.length))) {
+      replacements.push(entry);
+      assigned.set(entry.id, { instanceId: slot.instanceId, kind: slot.kind });
+    }
+  }
+  if (!Object.keys(database.settings.vacantSlotCounts).length) {
+    const selectFor = (kind: LotteryKind, requested: number) =>
+      choose(
+        current.filter((entry) => entry.kind === kind && entry.status === "pending"),
+        requested,
+      );
+    replacements.push(
+      ...selectFor("counter", database.settings.vacantCounterSlots),
+      ...selectFor("private", database.settings.vacantPrivateSlots),
+      ...selectFor("table", database.settings.vacantTableSlots),
+    );
+  }
   if (!replacements.length) throw new Error("再抽選できる候補者がいません");
   const ids = new Set(replacements.map((entry) => entry.id));
   const issuedCodes = new Set(
@@ -818,6 +1089,8 @@ export const redrawVacancies = async (): Promise<void> => {
           winnerCode: winnerCode(issuedCodes),
           drawnAt: timestamp,
           updatedAt: timestamp,
+          assignedInstanceId: assigned.get(entry.id)?.instanceId ?? entry.assignedInstanceId,
+          assignedKind: assigned.get(entry.id)?.kind ?? entry.assignedKind,
         }
       : entry,
   );
@@ -836,6 +1109,7 @@ export const redrawVacancies = async (): Promise<void> => {
     database.settings.vacantTableSlots -
       replacements.filter((entry) => entry.kind === "table").length,
   );
+  database.settings.vacantSlotCounts = {};
   database.settings.state = "drawn";
   database.settings.lastUpdatedAt = timestamp;
   database = withAudit(
@@ -862,7 +1136,7 @@ export const publishLotteryResults = async (): Promise<void> => {
   database.entries = database.entries.map((entry) =>
     entry.roundId === database.settings.roundId &&
     entry.status === "pending" &&
-    database.settings.drawnKinds.includes(entry.kind)
+    entry.drawnAt
       ? { ...entry, status: "loser", updatedAt: timestamp }
       : entry,
   );
@@ -880,6 +1154,10 @@ export const resetLottery = async (confirmation: string): Promise<void> => {
   const database = loadDemo();
   const next = initialDatabase();
   next.settings.availableKinds = [...database.settings.availableKinds];
+  next.settings.applicationDeadline = database.settings.applicationDeadline;
+  next.settings.instances = database.settings.instances;
+  next.settings.recruitmentSlots = database.settings.recruitmentSlots;
+  next.settings.featureSettings = database.settings.featureSettings;
   next.audits = withAudit(
     database,
     "抽選リセット",

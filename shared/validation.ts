@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { lotteryKinds, type LotteryKind, type SubmitLotteryInput } from './models';
+import { instanceIds, lotteryKinds, type LotteryKind, type SubmitLotteryInput } from './models';
 
 export const X_ID_PATTERN = /^@?[A-Za-z0-9_]{1,15}$/;
 export const VRC_NAME_MAX_LENGTH = 32;
@@ -30,22 +30,22 @@ const vrcNameSchema = z
 export const submitLotterySchema = z
   .object({
     kind: z.enum(lotteryKinds),
+    instanceId: z.enum(instanceIds).optional(),
+    preferenceMode: z.enum(['specified', 'omakase']).optional().default('specified'),
     representativeId: xIdSchema,
     representativeVrcName: vrcNameSchema,
     companionVrcName: z.string().trim().max(VRC_NAME_MAX_LENGTH, `同行者のVRC名は${VRC_NAME_MAX_LENGTH}文字以内で入力してください`).optional().default(''),
     token: z.string().min(32).max(256),
   })
   .superRefine((value, context) => {
-    if (value.kind === 'counter' && !value.companionVrcName) {
-      context.addIssue({
-        code: 'custom',
-        path: ['companionVrcName'],
-        message: 'カウンター応募には同行者のVRC名が必要です',
-      });
+    if (value.preferenceMode === 'omakase' && value.companionVrcName) {
+      context.addIssue({ code: 'custom', path: ['preferenceMode'], message: 'おまかせは1人応募の場合のみ選択できます' });
     }
   })
   .transform((value): SubmitLotteryInput => ({
     kind: value.kind,
+    instanceId: value.instanceId,
+    preferenceMode: value.preferenceMode,
     representativeId: normalizeXId(value.representativeId),
     representativeVrcName: value.representativeVrcName,
     companionVrcName: value.companionVrcName || undefined,
