@@ -23,6 +23,7 @@ import { Toast } from "../components/Feedback";
 import { useConfirmation } from "../components/useConfirmation";
 import { PublicHeader } from "../components/Brand";
 import { GuestCoinGallery } from "../components/GuestCoinGallery";
+import { usePollingWhileVisible } from "../lib/usePollingWhileVisible";
 import { LotteryGacha } from "../components/LotteryGacha";
 import {
   cancelLotteryEntry,
@@ -180,16 +181,16 @@ export const LotteryPage = () => {
 
   useEffect(() => {
     void refresh();
-    const interval = window.setInterval(() => void refresh(), 4000);
     const onUpdate = () => void refresh();
     window.addEventListener(LOTTERY_UPDATED_EVENT, onUpdate);
     window.addEventListener("focus", onUpdate);
     return () => {
-      window.clearInterval(interval);
       window.removeEventListener(LOTTERY_UPDATED_EVENT, onUpdate);
       window.removeEventListener("focus", onUpdate);
     };
   }, [refresh]);
+  // 非表示タブでは取得しない。表示に戻ったとき usePollingWhileVisible が即時に再取得する
+  usePollingWhileVisible(refresh, 4000);
 
   useEffect(() => {
     const available = snapshot?.settings.availableKinds;

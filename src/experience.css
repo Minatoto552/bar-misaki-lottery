@@ -700,3 +700,7 @@ input:not([type="checkbox"]) {
     flex-wrap: wrap;
   }
 }
+
+.admin-nav-group {
+  margin: 14px 0 4px;
+}

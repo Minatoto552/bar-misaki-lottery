@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Armchair,
+  ArrowRight,
   BarChart3,
   DoorOpen,
   LogOut,
@@ -22,6 +23,13 @@ import { Toast } from "../components/Feedback";
 import { useConfirmation } from "../components/useConfirmation";
 import { BrandMark } from "../components/Brand";
 import {
+  getDrawReadiness,
+  getNextAction,
+  getVacantTotal,
+  type DrawReadiness,
+} from "../lib/admin-operations";
+import { usePollingWhileVisible } from "../lib/usePollingWhileVisible";
+import {
   adminUpdateLotteryEntry,
   closeLottery,
   excludeWinners,
@@ -38,14 +46,15 @@ import {
   updateLotteryConfiguration,
 } from "../lib/lottery-api";
 
+// 運用の順番（準備 → 応募者確認 → 抽選 → 結果 → 記録）に並べる
 const tabs = [
   "dashboard",
+  "recruitment",
   "counter",
   "private",
   "table",
   "draw",
   "results",
-  "recruitment",
   "history",
 ] as const;
 type Tab = (typeof tabs)[number];
@@ -58,6 +67,25 @@ const tabLabels = {
   draw: "抽選実行",
   results: "当選者・結果公開",
   history: "操作履歴",
+};
+const navGroupTitles: Partial<Record<Tab, string>> = {
+  recruitment: "1. 準備",
+  counter: "2. 応募者",
+  draw: "3. 抽選",
+  results: "4. 結果",
+  history: "5. 記録",
+};
+const nextActionTones = {
+  info: "border-violet-200 bg-violet-50 text-violet-950",
+  action: "border-emerald-300 bg-emerald-50 text-emerald-950",
+  done: "border-slate-200 bg-slate-50 text-slate-900",
+  warning: "border-amber-300 bg-amber-50 text-amber-950",
+};
+const emptyReadiness: DrawReadiness = {
+  blockers: [],
+  warnings: [],
+  usableSlots: [],
+  maxWinners: 0,
 };
 const kindLabels: Record<LotteryKind, string> = {
   counter: "カウンター",
@@ -233,9 +261,8 @@ export const AdminLotteryPage = () => {
 
   useEffect(() => {
     void refresh();
-    const id = window.setInterval(() => void refresh(), 5000);
-    return () => window.clearInterval(id);
   }, [refresh]);
+  usePollingWhileVisible(refresh, 5000);
   useEffect(() => {
     if (!snapshot) return;
     setConfiguration({
@@ -327,6 +354,12 @@ export const AdminLotteryPage = () => {
   const cancelled = entries.filter((entry) => entry.status === "cancelled");
   const selectedWinners = winners.filter((entry) => selected.has(entry.id));
   const selectedExcluded = excluded.filter((entry) => selected.has(entry.id));
+  const nextAction = snapshot
+    ? getNextAction(snapshot.settings, entries)
+    : null;
+  const readiness = snapshot
+    ? getDrawReadiness(snapshot.settings, entries)
+    : emptyReadiness;
 
   if (!signedIn)
     return (
@@ -401,21 +434,25 @@ export const AdminLotteryPage = () => {
         <p className="eyebrow">WORKSPACE</p>
         <nav aria-label="管理メニュー">
           {tabs.map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              aria-current={activeTab === tab ? "page" : undefined}
-              onClick={() => {
-                setActiveTab(tab);
-                setSelected(new Set());
-                setSearch("");
-              }}
-            >
-              <span>{tabLabels[tab]}</span>
-              {(["counter", "private", "table"] as string[]).includes(tab) && (
-                <small>{counts[tab as LotteryKind].groups}</small>
-              )}
-            </button>
+            <Fragment key={tab}>
+              {navGroupTitles[tab] ? (
+                <p className="eyebrow admin-nav-group">{navGroupTitles[tab]}</p>
+              ) : null}
+              <button
+                type="button"
+                aria-current={activeTab === tab ? "page" : undefined}
+                onClick={() => {
+                  setActiveTab(tab);
+                  setSelected(new Set());
+                  setSearch("");
+                }}
+              >
+                <span>{tabLabels[tab]}</span>
+                {(["counter", "private", "table"] as string[]).includes(tab) && (
+                  <small>{counts[tab as LotteryKind].groups}</small>
+                )}
+              </button>
+            </Fragment>
           ))}
         </nav>
         <button
@@ -523,14 +560,35 @@ export const AdminLotteryPage = () => {
                   空き枠
                 </span>
                 <strong className="mt-1 block text-2xl">
-                  {snapshot.settings.vacantCounterSlots +
-                    snapshot.settings.vacantPrivateSlots +
-                    snapshot.settings.vacantTableSlots}
+                  {getVacantTotal(snapshot.settings)}
                   組
                 </strong>
               </div>
             </section>
             <section className="rounded-2xl bg-white p-4 sm:p-6">
+              {activeTab === "dashboard" && nextAction ? (
+                <section
+                  className={`mb-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border p-5 ${nextActionTones[nextAction.tone]}`}
+                >
+                  <div>
+                    <p className="text-xs font-bold tracking-[0.15em] opacity-70">
+                      NEXT ACTION
+                    </p>
+                    <h2 className="mt-1 text-xl font-bold">{nextAction.title}</h2>
+                    <p className="mt-1 text-sm leading-relaxed">
+                      {nextAction.description}
+                    </p>
+                  </div>
+                  <button
+                    className="button-primary"
+                    onClick={() => setActiveTab(nextAction.tab)}
+                    type="button"
+                  >
+                    操作を開く
+                    <ArrowRight size={16} />
+                  </button>
+                </section>
+              ) : null}
               {activeTab === "dashboard" ? (
                 <div className="overview-grid">
                   <section>
@@ -551,24 +609,6 @@ export const AdminLotteryPage = () => {
                         onClick={() => setActiveTab("recruitment")}
                       >
                         募集項目を設定
-                      </button>
-                      <button
-                        className="button-primary"
-                        onClick={() =>
-                          setActiveTab(
-                            ["accepting", "closed"].includes(
-                              snapshot.settings.state,
-                            )
-                              ? "draw"
-                              : "results",
-                          )
-                        }
-                      >
-                        {snapshot.settings.state === "accepting"
-                          ? "受付を締め切る"
-                          : snapshot.settings.state === "closed"
-                            ? "抽選へ進む"
-                            : "結果を管理"}
                       </button>
                     </div>
                   </section>
@@ -843,14 +883,36 @@ export const AdminLotteryPage = () => {
                           </button>
                         ) : null}
                       </div>
+                      <section className="mb-6 rounded-2xl border border-slate-200 p-5">
+                        <h2 className="text-lg font-bold">抽選前チェック</h2>
+                        {readiness.blockers.length ? (
+                          <ul className="mt-3 space-y-1.5 text-sm font-semibold text-red-700">
+                            {readiness.blockers.map((item) => (
+                              <li key={item}>✕ {item}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-3 text-sm font-semibold text-emerald-700">
+                            ✓ 抽選を実行できる状態です
+                          </p>
+                        )}
+                        {readiness.warnings.length ? (
+                          <ul className="mt-3 space-y-1.5 text-sm text-amber-800">
+                            {readiness.warnings.map((item) => (
+                              <li key={item}>！ {item}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        <p className="mt-3 text-sm text-slate-600">
+                          想定される最大当選数：{readiness.maxWinners}組
+                        </p>
+                      </section>
                       <h2 className="text-xl font-bold">抽選対象と当選枠</h2>
                       <p className="mt-2 text-sm text-slate-500">
                         募集項目設定で有効にしたインスタンス・席種・募集数を使用します。おまかせ応募は指定応募の抽選後、残っている有効枠へ割り当てます。
                       </p>
                       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                        {snapshot.settings.recruitmentSlots
-                          .filter((slot) => slot.enabled && slot.capacity > 0)
-                          .map((slot) => (
+                        {readiness.usableSlots.map((slot) => (
                             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4" key={slot.id}>
                               <strong className="block">
                                 {snapshot.settings.instances.find((instance) => instance.id === slot.instanceId)?.label}
@@ -868,21 +930,17 @@ export const AdminLotteryPage = () => {
                       </div>
                       <button
                         className="button-primary mt-4 disabled:opacity-40"
-                        disabled={
-                          busy ||
-                          !snapshot.settings.recruitmentSlots.some(
-                            (slot) => slot.enabled && slot.capacity > 0,
-                          ) ||
-                          snapshot.settings.state !== "closed"
-                        }
+                        disabled={busy || readiness.blockers.length > 0}
                         onClick={async () => {
-                          const summary = snapshot.settings.recruitmentSlots
-                            .filter((slot) => slot.enabled && slot.capacity > 0)
+                          const summary = readiness.usableSlots
                             .map((slot) => `${snapshot.settings.instances.find((instance) => instance.id === slot.instanceId)?.label}・${kindLabels[slot.kind]}${slot.capacity}組`)
                             .join("、");
+                          const notes = readiness.warnings.length
+                            ? `\n確認事項：${readiness.warnings.join("、")}`
+                            : "";
                           if (
                             await confirm(
-                              `${summary}を抽選します。よろしいですか？`,
+                              `${summary}を抽選します（最大${readiness.maxWinners}組が当選）。${notes}\n一度実行すると、結果は再抽選で変更できます。よろしいですか？`,
                             )
                           )
                             void execute(
