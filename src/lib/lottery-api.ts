@@ -1,6 +1,3 @@
-import { signInWithCustomToken, signOut } from "firebase/auth";
-import { httpsCallable } from "firebase/functions";
-
 import type {
   AdminLotterySnapshot,
   LotteryAuditLog,
@@ -62,7 +59,7 @@ const defaultSlots = () =>
 const initialDatabase = (): DemoDatabase => ({
   settings: {
     roundId: newRoundId(),
-    state: "accepting",
+    state: "preparing",
     availableKinds: ["counter", "private", "table"],
     drawnKinds: [],
     counterWinnerSlots: 0,
@@ -186,6 +183,7 @@ const call = async <TInput, TOutput>(
   }
   if (!firebaseServices.functions)
     throw new Error("Firebase Functionsが設定されていません");
+  const { httpsCallable } = await import("firebase/functions");
   const result = await httpsCallable<TInput, TOutput>(
     firebaseServices.functions,
     name,
@@ -268,9 +266,19 @@ const allocateConfiguredWinners = (
       remaining.set(slot.id, remaining.get(slot.id)! - 1);
     }
   }
-  const openAssignments = slots.flatMap((slot) =>
-    Array.from({ length: remaining.get(slot.id) ?? 0 }, () => slot),
+  // おまかせは、使用中インスタンスの余り枠へ入れる。
+  // 余り枠が複数のインスタンスにあるときは、当選人数が少ないインスタンスから埋めて人数を均等にする
+  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+  const peopleByInstance = new Map<string, number>(
+    [...activeInstances].map((id) => [id, 0]),
   );
+  for (const [entryId, assignment] of assignments) {
+    peopleByInstance.set(
+      assignment.instanceId,
+      (peopleByInstance.get(assignment.instanceId) ?? 0) +
+        (entryById.get(entryId)?.peopleCount ?? 0),
+    );
+  }
   const omakase = choose(
     entries.filter(
       (entry) =>
@@ -286,17 +294,31 @@ const allocateConfiguredWinners = (
     ).length,
   );
   for (const entry of omakase) {
-    if (!openAssignments.length) break;
-    const eligibleIndexes = openAssignments
-      .map((slot, index) => ({ slot, index }))
-      .filter(
-        ({ slot }) =>
-          entry.peopleCount >= slot.minPeople &&
-          entry.peopleCount <= slot.maxPeople,
-      );
-    if (!eligibleIndexes.length) continue;
-    const selected = eligibleIndexes[randomIndex(eligibleIndexes.length)]!;
-    const slot = openAssignments.splice(selected.index, 1)[0]!;
+    const eligible = slots.filter(
+      (slot) =>
+        (remaining.get(slot.id) ?? 0) > 0 &&
+        entry.peopleCount >= slot.minPeople &&
+        entry.peopleCount <= slot.maxPeople,
+    );
+    if (!eligible.length) continue;
+    const fewest = Math.min(
+      ...eligible.map((slot) => peopleByInstance.get(slot.instanceId) ?? 0),
+    );
+    const inInstance = eligible.filter(
+      (slot) => (peopleByInstance.get(slot.instanceId) ?? 0) === fewest,
+    );
+    const most = Math.max(
+      ...inInstance.map((slot) => remaining.get(slot.id) ?? 0),
+    );
+    const choices = inInstance.filter(
+      (slot) => (remaining.get(slot.id) ?? 0) === most,
+    );
+    const slot = choices[randomIndex(choices.length)]!;
+    remaining.set(slot.id, remaining.get(slot.id)! - 1);
+    peopleByInstance.set(
+      slot.instanceId,
+      (peopleByInstance.get(slot.instanceId) ?? 0) + entry.peopleCount,
+    );
     assignments.set(entry.id, {
       instanceId: slot.instanceId,
       kind: slot.kind,
@@ -339,6 +361,8 @@ export const submitLotteryEntry = async (
   }
 
   const database = loadDemo();
+  if (database.settings.state === "preparing")
+    throw new Error("まだ応募受付が始まっていません");
   if (database.settings.state !== "accepting")
     throw new Error("現在は応募を受け付けていません");
   if (
@@ -628,13 +652,17 @@ export const loginAdmin = async (password: string): Promise<void> => {
     { password: string },
     { customToken: string }
   >("adminLogin", { password });
+  const { signInWithCustomToken } = await import("firebase/auth");
   await signInWithCustomToken(firebaseServices.auth, customToken);
 };
 
 export const logoutAdmin = async (): Promise<void> => {
   sessionStorage.removeItem(ADMIN_KEY);
   sessionStorage.removeItem(SHARED_ADMIN_KEY);
-  if (firebaseServices.auth) await signOut(firebaseServices.auth);
+  if (firebaseServices.auth) {
+    const { signOut } = await import("firebase/auth");
+    await signOut(firebaseServices.auth);
+  }
 };
 
 export const isAdminSessionActive = (): boolean =>
@@ -658,6 +686,19 @@ export const getAdminLotterySnapshot =
     };
   };
 
+// 共有API版は lastUpdatedAt が変わっていなければ本体を返さない（ポーリングの転送量を削減）
+export const getAdminLotterySnapshotIfChanged = async (
+  since: string | null,
+): Promise<AdminLotterySnapshot | null> => {
+  if (isDemoMode || !isSharedApiMode || !since)
+    return getAdminLotterySnapshot();
+  const result = await call<
+    { since: string },
+    AdminLotterySnapshot & { unchanged?: boolean }
+  >("getAdminLottery", { since });
+  return result.unchanged ? null : result;
+};
+
 export const updateAvailableLotteryKinds = async (
   availableKinds: LotteryKind[],
 ): Promise<void> => {
@@ -669,8 +710,11 @@ export const updateAvailableLotteryKinds = async (
     return;
   }
   let database = loadDemo();
-  if (database.settings.state !== "accepting")
-    throw new Error("募集項目は応募受付中のみ変更できます");
+  if (
+    database.settings.state !== "preparing" &&
+    database.settings.state !== "accepting"
+  )
+    throw new Error("募集項目は受付開始前か応募受付中のみ変更できます");
   const timestamp = nowIso();
   database.settings.availableKinds = normalized;
   database.settings.lastUpdatedAt = timestamp;
@@ -696,8 +740,11 @@ export const updateLotteryConfiguration = async (
     return;
   }
   let database = loadDemo();
-  if (database.settings.state !== "accepting")
-    throw new Error("設定は応募受付中のみ変更できます");
+  if (
+    database.settings.state !== "preparing" &&
+    database.settings.state !== "accepting"
+  )
+    throw new Error("設定は受付開始前か応募受付中のみ変更できます");
   const instanceIds = new Set(input.instances.map((instance) => instance.id));
   if (input.instances.length !== 3 || instanceIds.size !== 3)
     throw new Error("インスタンス設定を確認してください");
@@ -767,6 +814,42 @@ export const adminUpdateLotteryEntry = async (
     "応募条件管理者修正",
     entry.kind,
     `${entry.entryNumber}の応募条件を修正`,
+  );
+  saveDemo(database);
+};
+
+// 抽選設定を確定して応募受付を始める（受付開始前 → 応募受付中）
+export const openLottery = async (): Promise<void> => {
+  if (!isDemoMode) {
+    await call("openLottery", {});
+    return;
+  }
+  if (!isAdminSessionActive()) throw new Error("管理者ログインが必要です");
+  let database = loadDemo();
+  if (database.settings.state !== "preparing")
+    throw new Error("受付開始前の場合のみ受付を開始できます");
+  const activeInstances = new Set(
+    database.settings.instances
+      .filter((instance) => instance.enabled && instance.visible)
+      .map((instance) => instance.id),
+  );
+  if (
+    !database.settings.recruitmentSlots.some(
+      (slot) =>
+        slot.enabled &&
+        slot.capacity > 0 &&
+        activeInstances.has(slot.instanceId) &&
+        database.settings.featureSettings.kindVisibility[slot.kind],
+    )
+  )
+    throw new Error("有効な募集枠がありません。募集設定で枠を設定してください");
+  database.settings.state = "accepting";
+  database.settings.lastUpdatedAt = nowIso();
+  database = withAudit(
+    database,
+    "応募受付開始",
+    "all",
+    "抽選設定を確定し、応募受付を開始",
   );
   saveDemo(database);
 };
