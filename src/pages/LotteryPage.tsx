@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Armchair,
@@ -24,7 +24,6 @@ import { useConfirmation } from "../components/useConfirmation";
 import { PublicHeader } from "../components/Brand";
 import { GuestCoinGallery } from "../components/GuestCoinGallery";
 import { usePollingWhileVisible } from "../lib/usePollingWhileVisible";
-import { LotteryGacha } from "../components/LotteryGacha";
 import {
   cancelLotteryEntry,
   cancelWinnerByCode,
@@ -36,7 +35,15 @@ import {
   submitLotteryEntry,
 } from "../lib/lottery-api";
 
+// 結果公開後にしか使わない演出は初回読み込みから分離する
+const LotteryGacha = lazy(() =>
+  import("../components/LotteryGacha").then((module) => ({
+    default: module.LotteryGacha,
+  })),
+);
+
 const stateLabels = {
+  preparing: "受付開始前",
   accepting: "応募受付中",
   drawing: "抽選中",
   drawn: "結果公開待ち",
@@ -207,6 +214,8 @@ export const LotteryPage = () => {
     setRepresentativeVrcName(current.representativeVrcName);
     setCompanionVrcName(current.companionVrcName ?? "");
     setApplicantCount(current.peopleCount === 2 ? 2 : 1);
+    // 応募の同期は entry.id が変わったときだけ（入力途中の内容を上書きしない）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot?.entry?.id]);
 
   const submit = async () => {
@@ -363,6 +372,7 @@ export const LotteryPage = () => {
                   </span>
                 </div>
                 {isPublished && entry.status !== "pending" ? (
+                  <Suspense fallback={<div className="py-8 text-center" role="status">読み込み中…</div>}>
                   <LotteryGacha
                     key={`${entry.id}:${entry.status}:${entry.winnerCode ?? "none"}`}
                     bypass={
@@ -458,6 +468,7 @@ export const LotteryPage = () => {
                       </div>
                     )}
                   </LotteryGacha>
+                  </Suspense>
                 ) : isPublished ? (
                   <div className="py-4 text-center">
                     <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-white/70">
@@ -802,10 +813,14 @@ export const LotteryPage = () => {
             ) : (
               <div className="py-12 text-center">
                 <h1 className="hero-heading mb-4">
-                  現在は応募受付を終了しています
+                  {snapshot?.settings.state === "preparing"
+                    ? "まもなく応募受付を開始します"
+                    : "現在は応募受付を終了しています"}
                 </h1>
                 <p className="opacity-70">
-                  次回の抽選受付開始までお待ちください。
+                  {snapshot?.settings.state === "preparing"
+                    ? "受付が始まるまで、このページを開いたままお待ちください。"
+                    : "次回の抽選受付開始までお待ちください。"}
                 </p>
               </div>
             )}

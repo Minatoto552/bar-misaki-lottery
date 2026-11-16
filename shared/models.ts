@@ -1,5 +1,6 @@
 export const lotteryKinds = ["counter", "private", "table"] as const;
 export const lotteryStates = [
+  "preparing",
   "accepting",
   "drawing",
   "drawn",

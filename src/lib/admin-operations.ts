@@ -4,11 +4,7 @@ import type {
   RecruitmentSlot,
 } from "../../shared/models";
 
-export type NextActionTab =
-  | "recruitment"
-  | "draw"
-  | "results"
-  | "history";
+export type NextActionTab = "settings" | "lottery" | "history";
 
 export interface NextAction {
   title: string;
@@ -105,20 +101,35 @@ export const getNextAction = (
   settings: LotterySettings,
   entries: LotteryEntry[],
 ): NextAction => {
+  if (settings.state === "preparing") {
+    return getUsableSlots(settings).length
+      ? {
+          title: "抽選内容を確認して、受付を開始してください",
+          description: "募集する席・組数・締切を確認し、問題なければ受付を開始します。開始するまでお客様は応募できません。",
+          tab: "lottery",
+          tone: "action",
+        }
+      : {
+          title: "まず募集設定をしてください",
+          description: "使うインスタンスと、席ごとの募集組数を決めて保存します。",
+          tab: "settings",
+          tone: "warning",
+        };
+  }
   if (settings.state === "accepting") {
     const usable = getUsableSlots(settings);
     if (!usable.length) {
       return {
         title: "募集枠を設定してください",
         description: "有効な募集枠がないため、応募を受け付けられません。",
-        tab: "recruitment",
+        tab: "settings",
         tone: "warning",
       };
     }
     return {
       title: "応募受付中です",
       description: "締切時刻になったら、または準備ができたら受付を締め切ってください。",
-      tab: "draw",
+      tab: "lottery",
       tone: "info",
     };
   }
@@ -128,13 +139,13 @@ export const getNextAction = (
       ? {
           title: "抽選前の確認が必要です",
           description: readiness.blockers[0],
-          tab: "draw",
+          tab: "lottery",
           tone: "warning",
         }
       : {
           title: "抽選を実行できます",
           description: "抽選前確認に問題はありません。内容を確認して実行してください。",
-          tab: "draw",
+          tab: "lottery",
           tone: "action",
         };
   }
@@ -143,13 +154,13 @@ export const getNextAction = (
       ? {
           title: "空き枠の再抽選が必要です",
           description: "除外や辞退で空いた枠があります。空き枠を再抽選してから公開できます。",
-          tab: "results",
+          tab: "lottery",
           tone: "warning",
         }
       : {
           title: "結果を公開できます",
           description: "当選者を確認し、問題がなければ結果を公開してください。",
-          tab: "results",
+          tab: "lottery",
           tone: "action",
         };
   }
@@ -157,7 +168,7 @@ export const getNextAction = (
     return {
       title: "結果公開中です",
       description: "当選者の確認状況を確認できます。",
-      tab: "results",
+      tab: "lottery",
       tone: "done",
     };
   }

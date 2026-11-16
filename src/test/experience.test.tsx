@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfirmModal } from '../components/Feedback';
 import { LotteryGacha } from '../components/LotteryGacha';
 import { LotteryPage } from '../pages/LotteryPage';
-import { cancelWinnerByCode, closeLottery, confirmWinnerByCode, ensureDeviceToken, getAdminLotterySnapshot, loginAdmin, lookupWinnerCode, publishLotteryResults, redrawLottery, resetLottery, runLottery, submitLotteryEntry } from '../lib/lottery-api';
+import { cancelWinnerByCode, closeLottery, confirmWinnerByCode, ensureDeviceToken, getAdminLotterySnapshot, loginAdmin, lookupWinnerCode, openLottery, publishLotteryResults, redrawLottery, resetLottery, runLottery, submitLotteryEntry } from '../lib/lottery-api';
 
 let root: Root;
 let container: HTMLDivElement;
@@ -18,6 +18,7 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false; };
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
 });
+beforeEach(async () => { await loginAdmin('3331'); await openLottery(); sessionStorage.clear(); });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); });
 async function render(node: ReactNode) { await act(async () => root.render(<MemoryRouter>{node}</MemoryRouter>)); }
 async function click(button: Element | undefined | null) { expect(button).toBeTruthy(); await act(async () => (button as HTMLElement).click()); }

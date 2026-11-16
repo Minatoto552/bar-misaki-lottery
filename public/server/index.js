@@ -1,33 +1,858 @@
-const kinds=['counter','private','table'],instanceIds=['instance1','instance2','instance3'],labels={counter:'カウンター',private:'個室',table:'テーブル席'},enc=new TextEncoder();
-const defaultInstances=()=>instanceIds.map((id,i)=>({id,label:`インスタンス${i+1}`,visible:i===0,enabled:i===0})),defaultSlots=()=>instanceIds.flatMap(instanceId=>kinds.map(kind=>({id:`${instanceId}:${kind}`,instanceId,kind,capacity:instanceId==='instance1'?1:0,minPeople:1,maxPeople:2,enabled:instanceId==='instance1'})));
-const now=()=>new Date().toISOString(),fresh=()=>({settings:{roundId:`round-${crypto.randomUUID()}`,state:'accepting',availableKinds:[...kinds],drawnKinds:[],counterWinnerSlots:0,privateWinnerSlots:0,tableWinnerSlots:0,vacantCounterSlots:0,vacantPrivateSlots:0,vacantTableSlots:0,publishedAt:null,lastUpdatedAt:now(),applicationDeadline:null,instances:defaultInstances(),recruitmentSlots:defaultSlots(),featureSettings:{showInstanceSelection:true,showKindSelection:true,showOmakase:true,kindVisibility:{counter:true,private:true,table:true}},vacantSlotCounts:{}},entries:[],audits:[],tokenEntryMap:{}});
-const error=(message,status=400)=>{const e=new Error(message);e.status=status;throw e},origin=r=>{const o=r.headers.get('Origin')||'';return o==='https://minatoto552.github.io'||o.endsWith('.chatgpt.site')?o:''},reply=(body,status=200,o='')=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Access-Control-Allow-Origin':o,'Access-Control-Allow-Headers':'Content-Type, Authorization','Access-Control-Allow-Methods':'POST, OPTIONS',Vary:'Origin'}});
-const migrate=d=>{d.settings.availableKinds??=[...kinds];d.settings.drawnKinds??=[];d.settings.applicationDeadline??=null;d.settings.instances??=defaultInstances();d.settings.recruitmentSlots=(d.settings.recruitmentSlots??defaultSlots()).map(s=>({...s,minPeople:s.minPeople??1,maxPeople:s.maxPeople??2}));d.settings.featureSettings??={showInstanceSelection:true,showKindSelection:true,showOmakase:true,kindVisibility:{counter:true,private:true,table:true}};d.settings.vacantSlotCounts??={};d.entries=d.entries.map(v=>({...v,confirmedAt:v.confirmedAt??null,preferenceMode:v.preferenceMode??'omakase',requestedInstanceId:v.requestedInstanceId??null,assignedInstanceId:v.assignedInstanceId??null,assignedKind:v.assignedKind??null,legacyAutoOmakase:v.legacyAutoOmakase??v.requestedInstanceId==null}));return d};
-const init=async db=>{await db.prepare('CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY,value TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0)').run();await db.prepare('INSERT OR IGNORE INTO app_state(key,value,version) VALUES(?,?,0)').bind('lottery',JSON.stringify(fresh())).run()},load=async db=>{await init(db);const r=await db.prepare('SELECT value,version FROM app_state WHERE key=?').bind('lottery').first(),d=migrate(JSON.parse(r.value));return{d,v:Number(r.version)}};
-const change=async(db,fn)=>{for(let n=0;n<8;n++){const{d,v}=await load(db),out=await fn(d),r=await db.prepare('UPDATE app_state SET value=?,version=version+1 WHERE key=? AND version=?').bind(JSON.stringify(d),'lottery',v).run();if(r.meta?.changes===1)return out}error('同時操作が発生しました。もう一度お試しください',409)};
-const audit=(d,action,target,details)=>{d.audits.unshift({id:`audit-${crypto.randomUUID()}`,actor:'admin',action,target,details,createdAt:now()});d.audits=d.audits.slice(0,500)},idx=max=>{if(!Number.isSafeInteger(max)||max<=0)error('抽選候補数が不正です');const a=new Uint32Array(1),range=0x100000000,limit=range-range%max;do crypto.getRandomValues(a);while(a[0]>=limit);return a[0]%max},pick=(a,n)=>{const p=[...a],s=[];while(s.length<n&&p.length)s.push(p.splice(idx(p.length),1)[0]);return s},code=(used=new Set())=>{const abc='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let c;do{const a=new Uint8Array(6);crypto.getRandomValues(a);c=`MSK-${[...a].map(x=>abc[x%abc.length]).join('')}`}while(used.has(c));used.add(c);return c};
-const allocate=(entries,settings,lockedIds=new Set())=>{const active=new Set(settings.instances.filter(x=>x.enabled&&x.visible).map(x=>x.id)),slots=settings.recruitmentSlots.filter(s=>s.enabled&&s.capacity>0&&active.has(s.instanceId)&&settings.featureSettings.kindVisibility[s.kind]);if(!slots.length)error('有効な募集枠がありません');const assignments=new Map(),remaining=new Map(slots.map(s=>[s.id,s.capacity]));for(const e of entries.filter(x=>lockedIds.has(x.id)&&x.status==='winner')){if(!e.assignedInstanceId||!e.assignedKind)continue;const id=`${e.assignedInstanceId}:${e.assignedKind}`;if(!remaining.has(id)||remaining.get(id)<=0)error(`${e.entryNumber}の当選確定枠が現在の募集設定と一致しません`);remaining.set(id,remaining.get(id)-1);assignments.set(e.id,{instanceId:e.assignedInstanceId,kind:e.assignedKind})}for(const s of slots){const c=entries.filter(e=>!lockedIds.has(e.id)&&e.status!=='excluded'&&e.preferenceMode==='specified'&&e.requestedInstanceId===s.instanceId&&e.kind===s.kind&&e.peopleCount>=s.minPeople&&e.peopleCount<=s.maxPeople);for(const e of pick(c,remaining.get(s.id)||0)){assignments.set(e.id,{instanceId:s.instanceId,kind:s.kind});remaining.set(s.id,remaining.get(s.id)-1)}}const open=slots.flatMap(s=>Array.from({length:remaining.get(s.id)||0},()=>s)),omakase=pick(entries.filter(e=>!lockedIds.has(e.id)&&e.status!=='excluded'&&e.preferenceMode==='omakase'),entries.length);for(const e of omakase){const eligible=open.map((s,index)=>({s,index})).filter(({s})=>e.peopleCount>=s.minPeople&&e.peopleCount<=s.maxPeople);if(!eligible.length)continue;const selected=eligible[idx(eligible.length)],s=open.splice(selected.index,1)[0];assignments.set(e.id,{instanceId:s.instanceId,kind:s.kind})}return{assignments,slots}};
-const b64=a=>btoa(String.fromCharCode(...a)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''),sign=async(v,s)=>{const k=await crypto.subtle.importKey('raw',enc.encode(s),{name:'HMAC',hash:'SHA-256'},false,['sign']);return b64(new Uint8Array(await crypto.subtle.sign('HMAC',k,enc.encode(v))))},token=async s=>{const p=b64(enc.encode(JSON.stringify({role:'admin',exp:Date.now()+43200000})));return`${p}.${await sign(p,s)}`},admin=async(r,e)=>{const t=(r.headers.get('Authorization')||'').replace(/^Bearer\s+/i,''),[p,s]=t.split('.');if(!p||!s||s!==await sign(p,e.ADMIN_SHARED_PASSWORD||''))error('管理者ログインが必要です',401);try{const x=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(p.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))));if(x.exp<Date.now())error('管理者セッションの有効期限が切れました',401)}catch{error('管理者ログインが必要です',401)}};
-const vacant=k=>`vacant${k==='counter'?'Counter':k==='private'?'Private':'Table'}Slots`;
-const api={
-adminLogin:async(r,e,x)=>{if(!e.ADMIN_SHARED_PASSWORD||x.password!==e.ADMIN_SHARED_PASSWORD)error('パスワードが正しくありません',403);return{sessionToken:await token(e.ADMIN_SHARED_PASSWORD)}},
-submitLotteryEntry:async(r,e,x)=>{const mode=x.preferenceMode==='omakase'?'omakase':'specified',companion=String(x.companionVrcName||'').trim(),requested=x.instanceId||'instance1';if(!kinds.includes(x.kind)||!/^@?[A-Za-z0-9_]{1,15}$/.test(String(x.representativeId||'')))error('入力内容を確認してください');if(!String(x.representativeVrcName||'').trim())error('代表者のVRC名を入力してください');if(mode==='omakase'&&companion)error('おまかせは1人応募の場合のみ選択できます');return change(e.DB,d=>{if(d.settings.state!=='accepting')error('現在は応募を受け付けていません');if(d.settings.applicationDeadline&&Date.now()>=new Date(d.settings.applicationDeadline).getTime())error('応募締切時刻を過ぎています');const existingId=d.tokenEntryMap[x.token],existing=d.entries.find(v=>v.id===existingId&&v.roundId===d.settings.roundId),instance=d.settings.instances.find(v=>v.id===requested),slot=d.settings.recruitmentSlots.find(v=>v.instanceId===requested&&v.kind===x.kind);if(mode==='omakase'){if(!d.settings.featureSettings.showOmakase)error('おまかせ応募は現在利用できません')}else if(!slot||!slot.enabled||slot.capacity<=0||!instance?.enabled||!instance?.visible||!d.settings.featureSettings.kindVisibility[x.kind])error('選択した募集枠は現在受け付けていません');const peopleCount=companion?2:1;if(mode==='specified'&&(peopleCount<slot.minPeople||peopleCount>slot.maxPeople))error(`${slot.minPeople}〜${slot.maxPeople}人で応募できる募集枠です`);const n=String(x.representativeId).trim().replace(/^@/,'').toLowerCase();if(d.entries.some(v=>v.roundId===d.settings.roundId&&v.id!==existingId&&v.normalizedIds.includes(n)))error('このX IDはすでに応募されています',409);const t=now(),id=existing?.id||`entry-${crypto.randomUUID()}`,entry={id,roundId:d.settings.roundId,entryNumber:existing?.entryNumber||`MSK-${String(d.entries.filter(v=>v.roundId===d.settings.roundId).length+1).padStart(4,'0')}`,kind:x.kind,representativeId:String(x.representativeId).trim(),representativeVrcName:String(x.representativeVrcName).trim(),companionVrcName:companion||null,normalizedIds:[n],peopleCount,status:existing?.status||'pending',winnerCode:null,previousWinnerCode:null,createdAt:existing?.createdAt||t,updatedAt:t,drawnAt:null,excludedAt:null,confirmedAt:null,preferenceMode:mode,requestedInstanceId:mode==='specified'?requested:null,assignedInstanceId:null,assignedKind:null,legacyAutoOmakase:false};if(existing)d.entries=d.entries.map(v=>v.id===id?entry:v);else d.entries.push(entry);d.tokenEntryMap[x.token]=id;d.settings.lastUpdatedAt=t;return{ok:true}})},
-getLotteryStatus:async(r,e,x)=>{const{d}=await load(e.DB),id=d.tokenEntryMap[x.token],f=d.entries.find(v=>v.id===id&&v.roundId===d.settings.roundId);let entry=null;if(f){const{normalizedIds,previousWinnerCode,...p}=f;entry={...p,status:d.settings.state==='published'?p.status:'pending',winnerCode:d.settings.state==='published'?p.winnerCode:null}}return{settings:{roundId:d.settings.roundId,state:d.settings.state,availableKinds:d.settings.availableKinds,drawnKinds:d.settings.drawnKinds,lastUpdatedAt:d.settings.lastUpdatedAt,applicationDeadline:d.settings.applicationDeadline,instances:d.settings.instances,recruitmentSlots:d.settings.recruitmentSlots,featureSettings:d.settings.featureSettings},entry}},
-getWinnerByCode:async(r,e,x)=>{const{d}=await load(e.DB),c=String(x.code||'').trim().toUpperCase();if(d.settings.state!=='published')error('結果はまだ公開されていません');const f=d.entries.find(v=>v.roundId===d.settings.roundId&&(v.winnerCode===c||v.previousWinnerCode===c));if(!f)error('WINNER CODEが見つかりません',404);const{normalizedIds,previousWinnerCode,...p}=f;return{settings:{roundId:d.settings.roundId,state:d.settings.state,availableKinds:d.settings.availableKinds,drawnKinds:d.settings.drawnKinds,lastUpdatedAt:d.settings.lastUpdatedAt,applicationDeadline:d.settings.applicationDeadline,instances:d.settings.instances,recruitmentSlots:d.settings.recruitmentSlots,featureSettings:d.settings.featureSettings},entry:{...p,winnerCode:f.status==='winner'?f.winnerCode:null}}},
-cancelWinnerByCode:async(r,e,x)=>{await load(e.DB);return change(e.DB,d=>{const c=String(x.code||'').trim().toUpperCase();if(d.settings.state!=='published')error('結果公開後のみ当選を取り消せます');const f=d.entries.find(v=>v.roundId===d.settings.roundId&&v.status==='winner'&&v.winnerCode===c);if(!f)error('取り消しできる当選者が見つかりません',404);const t=now();d.entries=d.entries.map(v=>v.id===f.id?{...v,status:'cancelled',previousWinnerCode:v.winnerCode,winnerCode:null,updatedAt:t}:v);d.settings.lastUpdatedAt=t;audit(d,'当選取り消し','all',f.entryNumber);return{ok:true}})},
-confirmWinnerByCode:async(r,e,x)=>{await load(e.DB);return change(e.DB,d=>{const c=String(x.code||'').trim().toUpperCase();if(d.settings.state!=='published')error('結果公開後のみ確認できます');const f=d.entries.find(v=>v.roundId===d.settings.roundId&&v.status==='winner'&&v.winnerCode===c);if(!f)error('確認できる当選者が見つかりません',404);const t=now();d.entries=d.entries.map(v=>v.id===f.id?{...v,confirmedAt:t,updatedAt:t}:v);d.settings.lastUpdatedAt=t;audit(d,'当選コード確認','all',f.entryNumber);return{ok:true}})},
-cancelLotteryEntry:async(r,e,x)=>change(e.DB,d=>{if(d.settings.state!=='accepting')error('受付締切後は応募をキャンセルできません');const v=d.entries.find(v=>v.id===d.tokenEntryMap[x.token]&&v.roundId===d.settings.roundId);if(!v)error('キャンセルできる応募が見つかりません',404);d.entries=d.entries.filter(x=>x.id!==v.id);delete d.tokenEntryMap[x.token];d.settings.lastUpdatedAt=now();audit(d,'応募キャンセル',v.kind,v.entryNumber);return{ok:true}}),
-getAdminLottery:async(r,e)=>{await admin(r,e);const{d}=await load(e.DB);return{settings:d.settings,entries:d.entries.filter(v=>v.roundId===d.settings.roundId),audits:d.audits.slice(0,100)}},
-updateAvailableLotteryKinds:async(r,e,x)=>{await admin(r,e);const a=kinds.filter(k=>x.availableKinds?.includes(k));if(!a.length)error('募集項目を1つ以上選択してください');return change(e.DB,d=>{if(d.settings.state!=='accepting')error('募集項目は応募受付中のみ変更できます');d.settings.availableKinds=a;d.settings.lastUpdatedAt=now();audit(d,'募集項目更新','all',`${a.map(k=>labels[k]).join('、')}を募集中に設定`);return{ok:true}})},
-updateLotteryConfiguration:async(r,e,x)=>{await admin(r,e);return change(e.DB,d=>{if(d.settings.state!=='accepting')error('設定は応募受付中のみ変更できます');if(!Array.isArray(x.instances)||x.instances.length!==3)error('インスタンス設定を確認してください');if(!Array.isArray(x.recruitmentSlots)||x.recruitmentSlots.some(s=>!instanceIds.includes(s.instanceId)||!kinds.includes(s.kind)||!Number.isInteger(Number(s.capacity))||Number(s.capacity)<0||!Number.isInteger(Number(s.minPeople))||!Number.isInteger(Number(s.maxPeople))||Number(s.minPeople)<1||Number(s.maxPeople)<Number(s.minPeople)||Number(s.maxPeople)>2))error('募集数・申し込み人数の設定を確認してください');d.settings.applicationDeadline=x.applicationDeadline||null;d.settings.instances=x.instances.map(v=>({id:v.id,label:String(v.label||v.id),visible:Boolean(v.visible),enabled:Boolean(v.enabled)}));d.settings.recruitmentSlots=x.recruitmentSlots.map(s=>({...s,capacity:Number(s.capacity),minPeople:Number(s.minPeople),maxPeople:Number(s.maxPeople),enabled:Boolean(s.enabled)}));d.settings.featureSettings=x.featureSettings;d.settings.availableKinds=kinds.filter(k=>x.featureSettings.kindVisibility[k]&&d.settings.recruitmentSlots.some(s=>s.kind===k&&s.enabled&&s.capacity>0));d.settings.lastUpdatedAt=now();audit(d,'インスタンス・募集枠設定更新','all',`${d.settings.recruitmentSlots.filter(s=>s.enabled&&s.capacity>0).length}枠を有効化`);return{ok:true}})},
-adminUpdateLotteryEntry:async(r,e,x)=>{await admin(r,e);return change(e.DB,d=>{const f=d.entries.find(v=>v.id===x.entryId);if(!f)error('応募が見つかりません',404);const t=now(),mode=x.preferenceMode==='omakase'?'omakase':'specified';d.entries=d.entries.map(v=>v.id===f.id?{...v,kind:x.kind,preferenceMode:mode,requestedInstanceId:mode==='omakase'?null:x.instanceId,legacyAutoOmakase:false,updatedAt:t}:v);d.settings.lastUpdatedAt=t;audit(d,'応募条件管理者修正',f.kind,`${f.entryNumber}の応募条件を修正`);return{ok:true}})},
-closeLottery:async(r,e)=>{await admin(r,e);return change(e.DB,d=>{if(d.settings.state!=='accepting')error('応募受付中の場合のみ締め切れます');const t=now();d.settings.state='closed';d.settings.lastUpdatedAt=t;audit(d,'応募受付締切','all','応募受付を締め切り');return{ok:true}})},
-runLottery:async(r,e)=>{await admin(r,e);return change(e.DB,d=>{if(d.settings.state!=='closed')error('応募受付を締め切ってから抽選してください');const cur=d.entries.filter(v=>v.roundId===d.settings.roundId),{assignments,slots}=allocate(cur,d.settings),used=new Set(),t=now(),win=new Set(assignments.keys());d.entries=d.entries.map(v=>v.roundId!==d.settings.roundId?v:{...v,status:win.has(v.id)?'winner':'pending',winnerCode:win.has(v.id)?code(used):null,previousWinnerCode:null,drawnAt:t,excludedAt:null,updatedAt:t,assignedInstanceId:assignments.get(v.id)?.instanceId||null,assignedKind:assignments.get(v.id)?.kind||null});d.settings={...d.settings,state:'drawn',drawnKinds:[...new Set(slots.map(s=>s.kind))],counterWinnerSlots:slots.filter(s=>s.kind==='counter').reduce((n,s)=>n+s.capacity,0),privateWinnerSlots:slots.filter(s=>s.kind==='private').reduce((n,s)=>n+s.capacity,0),tableWinnerSlots:slots.filter(s=>s.kind==='table').reduce((n,s)=>n+s.capacity,0),vacantCounterSlots:0,vacantPrivateSlots:0,vacantTableSlots:0,vacantSlotCounts:{},publishedAt:null,lastUpdatedAt:t};audit(d,'抽選実行','all',slots.map(s=>`${s.instanceId}/${labels[s.kind]}${s.capacity}組`).join('、'));return{ok:true}})},
-redrawLottery:async(r,e,x)=>{await admin(r,e);return change(e.DB,d=>{if(d.settings.state!=='drawn')error('抽選済みの結果がある場合のみ再抽選できます');const cur=d.entries.filter(v=>v.roundId===d.settings.roundId),locks=new Set(x.lockedEntryIds||[]),locked=cur.filter(v=>locks.has(v.id)&&v.status==='winner'),{assignments}=allocate(cur,d.settings,locks),win=new Set(assignments.keys()),used=new Set(locked.map(v=>v.winnerCode).filter(Boolean)),t=now();d.entries=d.entries.map(v=>v.roundId!==d.settings.roundId||v.status==='excluded'?v:{...v,status:win.has(v.id)?'winner':'pending',winnerCode:locks.has(v.id)?v.winnerCode:win.has(v.id)?code(used):null,previousWinnerCode:null,drawnAt:t,updatedAt:t,assignedInstanceId:assignments.get(v.id)?.instanceId||v.assignedInstanceId,assignedKind:assignments.get(v.id)?.kind||v.assignedKind});d.settings.vacantCounterSlots=0;d.settings.vacantPrivateSlots=0;d.settings.vacantTableSlots=0;d.settings.publishedAt=null;d.settings.lastUpdatedAt=t;audit(d,'抽選やり直し','all',`当選確定${locked.length}組・残りを再抽選`);return{ok:true}})},
-excludeLotteryWinners:async(r,e,x)=>{await admin(r,e);return change(e.DB,d=>{const a=d.entries.filter(v=>x.entryIds?.includes(v.id)&&v.status==='winner');if(!a.length)error('除外する当選組を選択してください');const t=now();d.entries=d.entries.map(v=>a.some(z=>z.id===v.id)?{...v,status:'excluded',previousWinnerCode:v.winnerCode,winnerCode:null,excludedAt:t,updatedAt:t}:v);for(const v of a)if(v.assignedInstanceId&&v.assignedKind){const id=`${v.assignedInstanceId}:${v.assignedKind}`;d.settings.vacantSlotCounts[id]=(d.settings.vacantSlotCounts[id]||0)+1}for(const k of kinds)d.settings[vacant(k)]+=a.filter(v=>(v.assignedKind||v.kind)===k).length;d.settings.state='drawn';d.settings.publishedAt=null;d.settings.lastUpdatedAt=t;audit(d,'当選者除外','all',a.map(v=>v.entryNumber).join(', '));return{ok:true}})},
-undoLotteryExclusions:async(r,e,x)=>{await admin(r,e);return change(e.DB,d=>{if(d.settings.state==='published')error('公開後は除外を取り消せません');const a=d.entries.filter(v=>x.entryIds?.includes(v.id)&&v.status==='excluded'),t=now();d.entries=d.entries.map(v=>a.some(z=>z.id===v.id)?{...v,status:'winner',winnerCode:v.previousWinnerCode||code(),previousWinnerCode:null,excludedAt:null,updatedAt:t}:v);for(const v of a)if(v.assignedInstanceId&&v.assignedKind){const id=`${v.assignedInstanceId}:${v.assignedKind}`;d.settings.vacantSlotCounts[id]=Math.max(0,(d.settings.vacantSlotCounts[id]||0)-1)}for(const k of kinds)d.settings[vacant(k)]=Math.max(0,d.settings[vacant(k)]-a.filter(v=>(v.assignedKind||v.kind)===k).length);d.settings.lastUpdatedAt=t;audit(d,'除外取消','all',a.map(v=>v.entryNumber).join(', '));return{ok:true}})},
-redrawLotteryVacancies:async(r,e)=>{await admin(r,e);return change(e.DB,d=>{const cur=d.entries.filter(v=>v.roundId===d.settings.roundId),a=[],assigned=new Map();for(const[id,n]of Object.entries(d.settings.vacantSlotCounts)){const s=d.settings.recruitmentSlots.find(v=>v.id===id);if(!s||n<=0)continue;const candidates=cur.filter(v=>v.status==='pending'&&!a.some(z=>z.id===v.id)&&v.peopleCount>=s.minPeople&&v.peopleCount<=s.maxPeople&&(v.preferenceMode==='omakase'||v.requestedInstanceId===s.instanceId&&v.kind===s.kind));for(const v of pick(candidates,Math.min(n,candidates.length))){a.push(v);assigned.set(v.id,{instanceId:s.instanceId,kind:s.kind})}}if(!a.length)error('再抽選できる候補者がいません');const ids=new Set(a.map(v=>v.id)),used=new Set(cur.map(v=>v.winnerCode).filter(Boolean)),t=now();d.entries=d.entries.map(v=>ids.has(v.id)?{...v,status:'winner',winnerCode:code(used),drawnAt:t,updatedAt:t,assignedInstanceId:assigned.get(v.id)?.instanceId||v.assignedInstanceId,assignedKind:assigned.get(v.id)?.kind||v.assignedKind}:v);for(const k of kinds)d.settings[vacant(k)]=0;d.settings.vacantSlotCounts={};d.settings.state='drawn';d.settings.lastUpdatedAt=t;audit(d,'空き枠再抽選','all',`${a.length}組を再抽選`);return{ok:true}})},
-publishLotteryResults:async(r,e)=>{await admin(r,e);return change(e.DB,d=>{if(d.settings.state!=='drawn')error('抽選済みの結果がありません');if(kinds.some(k=>d.settings[vacant(k)]))error('空き枠の再抽選を完了してください');const t=now();d.entries=d.entries.map(v=>v.roundId===d.settings.roundId&&v.status==='pending'&&v.drawnAt?{...v,status:'loser',updatedAt:t}:v);d.settings.state='published';d.settings.publishedAt=t;d.settings.lastUpdatedAt=t;audit(d,'結果公開','all','抽選結果を公開');return{ok:true}})},
-resetLottery:async(r,e,x)=>{await admin(r,e);if(x.confirmation!=='リセット')error('確認欄に「リセット」と入力してください');return change(e.DB,d=>{const old=d.settings.roundId,n=fresh();for(const key of ['availableKinds','applicationDeadline','instances','recruitmentSlots','featureSettings'])n.settings[key]=structuredClone(d.settings[key]);n.audits=d.audits;audit(n,'抽選リセット','all',`ラウンド ${old} をリセット（募集項目設定を保持）`);Object.assign(d,n);return{ok:true}})}
+const kinds = ["counter", "private", "table"],
+  instanceIds = ["instance1", "instance2", "instance3"],
+  labels = { counter: "カウンター", private: "個室", table: "テーブル席" },
+  enc = new TextEncoder();
+const defaultInstances = () =>
+    instanceIds.map((id, i) => ({ id, label: `インスタンス${i + 1}`, visible: i === 0, enabled: i === 0 })),
+  defaultSlots = () =>
+    instanceIds.flatMap((instanceId) =>
+      kinds.map((kind) => ({
+        id: `${instanceId}:${kind}`,
+        instanceId,
+        kind,
+        capacity: instanceId === "instance1" ? 1 : 0,
+        minPeople: 1,
+        maxPeople: 2,
+        enabled: instanceId === "instance1",
+      })),
+    );
+const now = () => new Date().toISOString(),
+  fresh = () => ({
+    settings: {
+      roundId: `round-${crypto.randomUUID()}`,
+      state: "preparing",
+      availableKinds: [...kinds],
+      drawnKinds: [],
+      counterWinnerSlots: 0,
+      privateWinnerSlots: 0,
+      tableWinnerSlots: 0,
+      vacantCounterSlots: 0,
+      vacantPrivateSlots: 0,
+      vacantTableSlots: 0,
+      publishedAt: null,
+      lastUpdatedAt: now(),
+      applicationDeadline: null,
+      instances: defaultInstances(),
+      recruitmentSlots: defaultSlots(),
+      featureSettings: {
+        showInstanceSelection: true,
+        showKindSelection: true,
+        showOmakase: true,
+        kindVisibility: { counter: true, private: true, table: true },
+      },
+      vacantSlotCounts: {},
+    },
+    entries: [],
+    audits: [],
+    tokenEntryMap: {},
+  });
+const error = (message, status = 400) => {
+    const e = new Error(message);
+    e.status = status;
+    throw e;
+  },
+  origin = (r, e = {}) => {
+    const o = r.headers.get("Origin") || "",
+      allowed = [
+        "https://minatoto552.github.io",
+        ...String(e.ALLOWED_ORIGINS || "")
+          .split(",")
+          .map((v) => v.trim())
+          .filter(Boolean),
+      ];
+    return allowed.includes(o) || o.endsWith(".chatgpt.site") ? o : "";
+  },
+  reply = (body, status = 200, o = "") =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Access-Control-Allow-Origin": o,
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        Vary: "Origin",
+      },
+    });
+const migrate = (d) => {
+  d.settings.availableKinds ??= [...kinds];
+  d.settings.drawnKinds ??= [];
+  d.settings.applicationDeadline ??= null;
+  d.settings.instances ??= defaultInstances();
+  d.settings.recruitmentSlots = (d.settings.recruitmentSlots ?? defaultSlots()).map((s) => ({
+    ...s,
+    minPeople: s.minPeople ?? 1,
+    maxPeople: s.maxPeople ?? 2,
+  }));
+  d.settings.featureSettings ??= {
+    showInstanceSelection: true,
+    showKindSelection: true,
+    showOmakase: true,
+    kindVisibility: { counter: true, private: true, table: true },
+  };
+  d.settings.vacantSlotCounts ??= {};
+  d.entries = d.entries.map((v) => ({
+    ...v,
+    confirmedAt: v.confirmedAt ?? null,
+    preferenceMode: v.preferenceMode ?? "omakase",
+    requestedInstanceId: v.requestedInstanceId ?? null,
+    assignedInstanceId: v.assignedInstanceId ?? null,
+    assignedKind: v.assignedKind ?? null,
+    legacyAutoOmakase: v.legacyAutoOmakase ?? v.requestedInstanceId == null,
+  }));
+  return d;
 };
-export default{async fetch(request,env){const o=origin(request);if(request.method==='OPTIONS')return reply({ok:true},200,o);const u=new URL(request.url);if(u.pathname.startsWith('/api/'))try{if(!env.DB)error('共有データベースが設定されていません',503);const h=api[u.pathname.slice(5)];if(!h)error('APIが見つかりません',404);return reply(await h(request,env,await request.json().catch(()=>({}))),200,o)}catch(e){return reply({error:e.message||'サーバー処理に失敗しました'},e.status||500,o)}const res=await env.ASSETS.fetch(request);if(res.status!==404)return res;u.pathname='/index.html';return env.ASSETS.fetch(new Request(u,request))}};
+const init = async (db) => {
+    await db
+      .prepare(
+        "CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY,value TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0)",
+      )
+      .run();
+    await db
+      .prepare("INSERT OR IGNORE INTO app_state(key,value,version) VALUES(?,?,0)")
+      .bind("lottery", JSON.stringify(fresh()))
+      .run();
+  },
+  load = async (db) => {
+    await init(db);
+    const r = await db.prepare("SELECT value,version FROM app_state WHERE key=?").bind("lottery").first(),
+      d = migrate(JSON.parse(r.value));
+    return { d, v: Number(r.version) };
+  };
+const change = async (db, fn) => {
+  for (let n = 0; n < 12; n++) {
+    if (n) await new Promise((r) => setTimeout(r, Math.random() * 25 * n));
+    const { d, v } = await load(db),
+      out = await fn(d),
+      r = await db
+        .prepare("UPDATE app_state SET value=?,version=version+1 WHERE key=? AND version=?")
+        .bind(JSON.stringify(d), "lottery", v)
+        .run();
+    if (r.meta?.changes === 1) return out;
+  }
+  error("同時操作が発生しました。もう一度お試しください", 409);
+};
+const audit = (d, action, target, details) => {
+    d.audits.unshift({ id: `audit-${crypto.randomUUID()}`, actor: "admin", action, target, details, createdAt: now() });
+    d.audits = d.audits.slice(0, 500);
+  },
+  idx = (max) => {
+    if (!Number.isSafeInteger(max) || max <= 0) error("抽選候補数が不正です");
+    const a = new Uint32Array(1),
+      range = 0x100000000,
+      limit = range - (range % max);
+    do crypto.getRandomValues(a);
+    while (a[0] >= limit);
+    return a[0] % max;
+  },
+  pick = (a, n) => {
+    const p = [...a],
+      s = [];
+    while (s.length < n && p.length) s.push(p.splice(idx(p.length), 1)[0]);
+    return s;
+  },
+  code = (used = new Set()) => {
+    const abc = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let c;
+    do {
+      const a = new Uint8Array(6);
+      crypto.getRandomValues(a);
+      c = `MSK-${[...a].map((x) => abc[x % abc.length]).join("")}`;
+    } while (used.has(c));
+    used.add(c);
+    return c;
+  };
+const allocate = (entries, settings, lockedIds = new Set()) => {
+  const active = new Set(settings.instances.filter((x) => x.enabled && x.visible).map((x) => x.id)),
+    slots = settings.recruitmentSlots.filter(
+      (s) => s.enabled && s.capacity > 0 && active.has(s.instanceId) && settings.featureSettings.kindVisibility[s.kind],
+    );
+  if (!slots.length) error("有効な募集枠がありません");
+  const assignments = new Map(),
+    remaining = new Map(slots.map((s) => [s.id, s.capacity]));
+  for (const e of entries.filter((x) => lockedIds.has(x.id) && x.status === "winner")) {
+    if (!e.assignedInstanceId || !e.assignedKind) continue;
+    const id = `${e.assignedInstanceId}:${e.assignedKind}`;
+    if (!remaining.has(id) || remaining.get(id) <= 0)
+      error(`${e.entryNumber}の当選確定枠が現在の募集設定と一致しません`);
+    remaining.set(id, remaining.get(id) - 1);
+    assignments.set(e.id, { instanceId: e.assignedInstanceId, kind: e.assignedKind });
+  }
+  for (const s of slots) {
+    const c = entries.filter(
+      (e) =>
+        !lockedIds.has(e.id) &&
+        e.status !== "excluded" &&
+        e.preferenceMode === "specified" &&
+        e.requestedInstanceId === s.instanceId &&
+        e.kind === s.kind &&
+        e.peopleCount >= s.minPeople &&
+        e.peopleCount <= s.maxPeople,
+    );
+    for (const e of pick(c, remaining.get(s.id) || 0)) {
+      assignments.set(e.id, { instanceId: s.instanceId, kind: s.kind });
+      remaining.set(s.id, remaining.get(s.id) - 1);
+    }
+  }
+  // おまかせは、使用中インスタンスの余り枠へ入れる。
+  // 余り枠が複数のインスタンスにあるときは、当選人数が少ないインスタンスから埋めて人数を均等にする
+  const byId = new Map(entries.map((e) => [e.id, e])),
+    people = new Map([...active].map((id) => [id, 0]));
+  for (const [id, a] of assignments) people.set(a.instanceId, (people.get(a.instanceId) || 0) + (byId.get(id)?.peopleCount || 0));
+  const omakase = pick(
+    entries.filter((e) => !lockedIds.has(e.id) && e.status !== "excluded" && e.preferenceMode === "omakase"),
+    entries.length,
+  );
+  for (const e of omakase) {
+    const eligible = slots.filter(
+      (s) => (remaining.get(s.id) || 0) > 0 && e.peopleCount >= s.minPeople && e.peopleCount <= s.maxPeople,
+    );
+    if (!eligible.length) continue;
+    const fewest = Math.min(...eligible.map((s) => people.get(s.instanceId) || 0)),
+      inInstance = eligible.filter((s) => (people.get(s.instanceId) || 0) === fewest),
+      most = Math.max(...inInstance.map((s) => remaining.get(s.id) || 0)),
+      choices = inInstance.filter((s) => (remaining.get(s.id) || 0) === most),
+      s = choices[idx(choices.length)];
+    remaining.set(s.id, remaining.get(s.id) - 1);
+    people.set(s.instanceId, (people.get(s.instanceId) || 0) + e.peopleCount);
+    assignments.set(e.id, { instanceId: s.instanceId, kind: s.kind });
+  }
+  return { assignments, slots };
+};
+const b64 = (a) =>
+    btoa(String.fromCharCode(...a))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, ""),
+  sign = async (v, s) => {
+    const k = await crypto.subtle.importKey("raw", enc.encode(s), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return b64(new Uint8Array(await crypto.subtle.sign("HMAC", k, enc.encode(v))));
+  },
+  token = async (e) => {
+    const p = b64(enc.encode(JSON.stringify({ role: "admin", exp: Date.now() + 43200000 })));
+    return `${p}.${await sign(p, await sessionSecret(e))}`;
+  },
+  admin = async (r, e) => {
+    const t = (r.headers.get("Authorization") || "").replace(/^Bearer\s+/i, ""),
+      [p, s] = t.split(".");
+    if (!p || !s || !(await safeEqual(s, await sign(p, await sessionSecret(e)))))
+      error("管理者ログインが必要です", 401);
+    try {
+      const x = JSON.parse(
+        new TextDecoder().decode(
+          Uint8Array.from(atob(p.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0)),
+        ),
+      );
+      if (x.exp < Date.now()) error("管理者セッションの有効期限が切れました", 401);
+    } catch {
+      error("管理者ログインが必要です", 401);
+    }
+  };
+const safeEqual = async (a, b) => {
+    const h = async (v) => new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(String(v)))),
+      x = await h(a),
+      y = await h(b);
+    let diff = 0;
+    for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+    return diff === 0;
+  },
+  sessionSecret = async (e) => {
+    if (e.ADMIN_SESSION_SECRET) return e.ADMIN_SESSION_SECRET;
+    const p = e.ADMIN_SHARED_PASSWORD || "";
+    return sign("bar-misaki-admin-session-v1", p);
+  },
+  clientKey = (r) => r.headers.get("CF-Connecting-IP") || r.headers.get("X-Forwarded-For") || "unknown",
+  limit = async (db, r, scope, max, windowMs) => {
+    try {
+      await db
+        .prepare(
+          "CREATE TABLE IF NOT EXISTS rate_limit (key TEXT PRIMARY KEY,count INTEGER NOT NULL,reset_at INTEGER NOT NULL)",
+        )
+        .run();
+      const key = `${scope}:${clientKey(r)}`,
+        t = Date.now(),
+        row = await db.prepare("SELECT count,reset_at FROM rate_limit WHERE key=?").bind(key).first();
+      if (!row || row.reset_at <= t) {
+        await db
+          .prepare("INSERT OR REPLACE INTO rate_limit(key,count,reset_at) VALUES(?,?,?)")
+          .bind(key, 1, t + windowMs)
+          .run();
+        return;
+      }
+      if (row.count >= max) {
+        const e = new Error("操作が集中しています。しばらくしてからお試しください");
+        e.status = 429;
+        throw e;
+      }
+      await db.prepare("UPDATE rate_limit SET count=count+1 WHERE key=?").bind(key).run();
+    } catch (err) {
+      if (err.status === 429) throw err;
+    }
+  },
+  clearLimit = async (db, r, scope) => {
+    try {
+      await db.prepare("DELETE FROM rate_limit WHERE key=?").bind(`${scope}:${clientKey(r)}`).run();
+    } catch {
+      // 制限テーブルが使えなくてもログイン自体は成功させる
+    }
+  },
+  deviceToken = (x) => {
+    const t = String(x?.token || "");
+    if (t.length < 32 || t.length > 256) error("端末トークンが不正です");
+    return t;
+  };
+const vacant = (k) => `vacant${k === "counter" ? "Counter" : k === "private" ? "Private" : "Table"}Slots`;
+const api = {
+  adminLogin: async (r, e, x) => {
+    await limit(e.DB, r, "login", 5, 600000);
+    if (!e.ADMIN_SHARED_PASSWORD || !(await safeEqual(x.password ?? "", e.ADMIN_SHARED_PASSWORD)))
+      error("パスワードが正しくありません", 403);
+    await clearLimit(e.DB, r, "login");
+    return { sessionToken: await token(e) };
+  },
+  submitLotteryEntry: async (r, e, x) => {
+    await limit(e.DB, r, "submit", 20, 600000);
+    x = { ...x, token: deviceToken(x) };
+    const mode = x.preferenceMode === "omakase" ? "omakase" : "specified",
+      companion = String(x.companionVrcName || "").trim(),
+      requested = x.instanceId || "instance1";
+    if (!kinds.includes(x.kind) || !/^@?[A-Za-z0-9_]{1,15}$/.test(String(x.representativeId || "")))
+      error("入力内容を確認してください");
+    if (!String(x.representativeVrcName || "").trim()) error("代表者のVRC名を入力してください");
+    if (mode === "omakase" && companion) error("おまかせは1人応募の場合のみ選択できます");
+    return change(e.DB, (d) => {
+      if (d.settings.state === "preparing") error("まだ応募受付が始まっていません");
+      if (d.settings.state !== "accepting") error("現在は応募を受け付けていません");
+      if (d.settings.applicationDeadline && Date.now() >= new Date(d.settings.applicationDeadline).getTime())
+        error("応募締切時刻を過ぎています");
+      const existingId = d.tokenEntryMap[x.token],
+        existing = d.entries.find((v) => v.id === existingId && v.roundId === d.settings.roundId),
+        instance = d.settings.instances.find((v) => v.id === requested),
+        slot = d.settings.recruitmentSlots.find((v) => v.instanceId === requested && v.kind === x.kind);
+      if (mode === "omakase") {
+        if (!d.settings.featureSettings.showOmakase) error("おまかせ応募は現在利用できません");
+      } else if (
+        !slot ||
+        !slot.enabled ||
+        slot.capacity <= 0 ||
+        !instance?.enabled ||
+        !instance?.visible ||
+        !d.settings.featureSettings.kindVisibility[x.kind]
+      )
+        error("選択した募集枠は現在受け付けていません");
+      const peopleCount = companion ? 2 : 1;
+      if (mode === "specified" && (peopleCount < slot.minPeople || peopleCount > slot.maxPeople))
+        error(`${slot.minPeople}〜${slot.maxPeople}人で応募できる募集枠です`);
+      const n = String(x.representativeId).trim().replace(/^@/, "").toLowerCase();
+      if (d.entries.some((v) => v.roundId === d.settings.roundId && v.id !== existingId && v.normalizedIds.includes(n)))
+        error("このX IDはすでに応募されています", 409);
+      const t = now(),
+        id = existing?.id || `entry-${crypto.randomUUID()}`,
+        entry = {
+          id,
+          roundId: d.settings.roundId,
+          entryNumber:
+            existing?.entryNumber ||
+            `MSK-${String(d.entries.filter((v) => v.roundId === d.settings.roundId).length + 1).padStart(4, "0")}`,
+          kind: x.kind,
+          representativeId: String(x.representativeId).trim(),
+          representativeVrcName: String(x.representativeVrcName).trim(),
+          companionVrcName: companion || null,
+          normalizedIds: [n],
+          peopleCount,
+          status: existing?.status || "pending",
+          winnerCode: null,
+          previousWinnerCode: null,
+          createdAt: existing?.createdAt || t,
+          updatedAt: t,
+          drawnAt: null,
+          excludedAt: null,
+          confirmedAt: null,
+          preferenceMode: mode,
+          requestedInstanceId: mode === "specified" ? requested : null,
+          assignedInstanceId: null,
+          assignedKind: null,
+          legacyAutoOmakase: false,
+        };
+      if (existing) d.entries = d.entries.map((v) => (v.id === id ? entry : v));
+      else d.entries.push(entry);
+      d.tokenEntryMap[x.token] = id;
+      d.settings.lastUpdatedAt = t;
+      return { ok: true };
+    });
+  },
+  getLotteryStatus: async (r, e, x) => {
+    const tk = deviceToken(x),
+      { d } = await load(e.DB),
+      id = d.tokenEntryMap[tk],
+      f = d.entries.find((v) => v.id === id && v.roundId === d.settings.roundId);
+    let entry = null;
+    if (f) {
+      const { normalizedIds, previousWinnerCode, ...p } = f;
+      entry = {
+        ...p,
+        status: d.settings.state === "published" ? p.status : "pending",
+        winnerCode: d.settings.state === "published" ? p.winnerCode : null,
+      };
+    }
+    return {
+      settings: {
+        roundId: d.settings.roundId,
+        state: d.settings.state,
+        availableKinds: d.settings.availableKinds,
+        drawnKinds: d.settings.drawnKinds,
+        lastUpdatedAt: d.settings.lastUpdatedAt,
+        applicationDeadline: d.settings.applicationDeadline,
+        instances: d.settings.instances,
+        recruitmentSlots: d.settings.recruitmentSlots,
+        featureSettings: d.settings.featureSettings,
+      },
+      entry,
+    };
+  },
+  getWinnerByCode: async (r, e, x) => {
+    await limit(e.DB, r, "code", 30, 600000);
+    const { d } = await load(e.DB),
+      c = String(x.code || "")
+        .trim()
+        .toUpperCase();
+    if (d.settings.state !== "published") error("結果はまだ公開されていません");
+    const f = d.entries.find(
+      (v) => v.roundId === d.settings.roundId && (v.winnerCode === c || v.previousWinnerCode === c),
+    );
+    if (!f) error("WINNER CODEが見つかりません", 404);
+    const { normalizedIds, previousWinnerCode, ...p } = f;
+    return {
+      settings: {
+        roundId: d.settings.roundId,
+        state: d.settings.state,
+        availableKinds: d.settings.availableKinds,
+        drawnKinds: d.settings.drawnKinds,
+        lastUpdatedAt: d.settings.lastUpdatedAt,
+        applicationDeadline: d.settings.applicationDeadline,
+        instances: d.settings.instances,
+        recruitmentSlots: d.settings.recruitmentSlots,
+        featureSettings: d.settings.featureSettings,
+      },
+      entry: { ...p, winnerCode: f.status === "winner" ? f.winnerCode : null },
+    };
+  },
+  cancelWinnerByCode: async (r, e, x) => {
+    await limit(e.DB, r, "code", 30, 600000);
+    await load(e.DB);
+    return change(e.DB, (d) => {
+      const c = String(x.code || "")
+        .trim()
+        .toUpperCase();
+      if (d.settings.state !== "published") error("結果公開後のみ当選を取り消せます");
+      const f = d.entries.find((v) => v.roundId === d.settings.roundId && v.status === "winner" && v.winnerCode === c);
+      if (!f) error("取り消しできる当選者が見つかりません", 404);
+      const t = now();
+      d.entries = d.entries.map((v) =>
+        v.id === f.id
+          ? { ...v, status: "cancelled", previousWinnerCode: v.winnerCode, winnerCode: null, updatedAt: t }
+          : v,
+      );
+      d.settings.lastUpdatedAt = t;
+      audit(d, "当選取り消し", "all", f.entryNumber);
+      return { ok: true };
+    });
+  },
+  confirmWinnerByCode: async (r, e, x) => {
+    await limit(e.DB, r, "code", 30, 600000);
+    await load(e.DB);
+    return change(e.DB, (d) => {
+      const c = String(x.code || "")
+        .trim()
+        .toUpperCase();
+      if (d.settings.state !== "published") error("結果公開後のみ確認できます");
+      const f = d.entries.find((v) => v.roundId === d.settings.roundId && v.status === "winner" && v.winnerCode === c);
+      if (!f) error("確認できる当選者が見つかりません", 404);
+      const t = now();
+      d.entries = d.entries.map((v) => (v.id === f.id ? { ...v, confirmedAt: t, updatedAt: t } : v));
+      d.settings.lastUpdatedAt = t;
+      audit(d, "当選コード確認", "all", f.entryNumber);
+      return { ok: true };
+    });
+  },
+  cancelLotteryEntry: async (r, e, x) => {
+    x = { ...x, token: deviceToken(x) };
+    return change(e.DB, (d) => {
+      if (d.settings.state !== "accepting") error("受付締切後は応募をキャンセルできません");
+      const v = d.entries.find((v) => v.id === d.tokenEntryMap[x.token] && v.roundId === d.settings.roundId);
+      if (!v) error("キャンセルできる応募が見つかりません", 404);
+      d.entries = d.entries.filter((x) => x.id !== v.id);
+      delete d.tokenEntryMap[x.token];
+      d.settings.lastUpdatedAt = now();
+      audit(d, "応募キャンセル", v.kind, v.entryNumber);
+      return { ok: true };
+    });
+  },
+  getAdminLottery: async (r, e, x) => {
+    await admin(r, e);
+    const { d } = await load(e.DB);
+    if (x.since && x.since === d.settings.lastUpdatedAt) return { unchanged: true };
+    return {
+      settings: d.settings,
+      entries: d.entries.filter((v) => v.roundId === d.settings.roundId),
+      audits: d.audits.slice(0, 100),
+    };
+  },
+  updateAvailableLotteryKinds: async (r, e, x) => {
+    await admin(r, e);
+    const a = kinds.filter((k) => x.availableKinds?.includes(k));
+    if (!a.length) error("募集項目を1つ以上選択してください");
+    return change(e.DB, (d) => {
+      if (d.settings.state !== "preparing" && d.settings.state !== "accepting")
+        error("募集項目は受付開始前か応募受付中のみ変更できます");
+      d.settings.availableKinds = a;
+      d.settings.lastUpdatedAt = now();
+      audit(d, "募集項目更新", "all", `${a.map((k) => labels[k]).join("、")}を募集中に設定`);
+      return { ok: true };
+    });
+  },
+  updateLotteryConfiguration: async (r, e, x) => {
+    await admin(r, e);
+    return change(e.DB, (d) => {
+      if (d.settings.state !== "preparing" && d.settings.state !== "accepting")
+        error("設定は受付開始前か応募受付中のみ変更できます");
+      if (!Array.isArray(x.instances) || x.instances.length !== 3) error("インスタンス設定を確認してください");
+      if (
+        !Array.isArray(x.recruitmentSlots) ||
+        x.recruitmentSlots.some(
+          (s) =>
+            !instanceIds.includes(s.instanceId) ||
+            !kinds.includes(s.kind) ||
+            !Number.isInteger(Number(s.capacity)) ||
+            Number(s.capacity) < 0 ||
+            !Number.isInteger(Number(s.minPeople)) ||
+            !Number.isInteger(Number(s.maxPeople)) ||
+            Number(s.minPeople) < 1 ||
+            Number(s.maxPeople) < Number(s.minPeople) ||
+            Number(s.maxPeople) > 2,
+        )
+      )
+        error("募集数・申し込み人数の設定を確認してください");
+      d.settings.applicationDeadline = x.applicationDeadline || null;
+      d.settings.instances = x.instances.map((v) => ({
+        id: v.id,
+        label: String(v.label || v.id),
+        visible: Boolean(v.visible),
+        enabled: Boolean(v.enabled),
+      }));
+      d.settings.recruitmentSlots = x.recruitmentSlots.map((s) => ({
+        ...s,
+        capacity: Number(s.capacity),
+        minPeople: Number(s.minPeople),
+        maxPeople: Number(s.maxPeople),
+        enabled: Boolean(s.enabled),
+      }));
+      d.settings.featureSettings = x.featureSettings;
+      d.settings.availableKinds = kinds.filter(
+        (k) =>
+          x.featureSettings.kindVisibility[k] &&
+          d.settings.recruitmentSlots.some((s) => s.kind === k && s.enabled && s.capacity > 0),
+      );
+      d.settings.lastUpdatedAt = now();
+      audit(
+        d,
+        "インスタンス・募集枠設定更新",
+        "all",
+        `${d.settings.recruitmentSlots.filter((s) => s.enabled && s.capacity > 0).length}枠を有効化`,
+      );
+      return { ok: true };
+    });
+  },
+  adminUpdateLotteryEntry: async (r, e, x) => {
+    await admin(r, e);
+    return change(e.DB, (d) => {
+      const f = d.entries.find((v) => v.id === x.entryId);
+      if (!f) error("応募が見つかりません", 404);
+      const t = now(),
+        mode = x.preferenceMode === "omakase" ? "omakase" : "specified";
+      d.entries = d.entries.map((v) =>
+        v.id === f.id
+          ? {
+              ...v,
+              kind: x.kind,
+              preferenceMode: mode,
+              requestedInstanceId: mode === "omakase" ? null : x.instanceId,
+              legacyAutoOmakase: false,
+              updatedAt: t,
+            }
+          : v,
+      );
+      d.settings.lastUpdatedAt = t;
+      audit(d, "応募条件管理者修正", f.kind, `${f.entryNumber}の応募条件を修正`);
+      return { ok: true };
+    });
+  },
+  openLottery: async (r, e) => {
+    await admin(r, e);
+    return change(e.DB, (d) => {
+      if (d.settings.state !== "preparing") error("受付開始前の場合のみ受付を開始できます");
+      const active = new Set(d.settings.instances.filter((v) => v.enabled && v.visible).map((v) => v.id));
+      if (
+        !d.settings.recruitmentSlots.some(
+          (s) => s.enabled && s.capacity > 0 && active.has(s.instanceId) && d.settings.featureSettings.kindVisibility[s.kind],
+        )
+      )
+        error("有効な募集枠がありません。募集設定で枠を設定してください");
+      const t = now();
+      d.settings.state = "accepting";
+      d.settings.lastUpdatedAt = t;
+      audit(d, "応募受付開始", "all", "抽選設定を確定し、応募受付を開始");
+      return { ok: true };
+    });
+  },
+  closeLottery: async (r, e) => {
+    await admin(r, e);
+    return change(e.DB, (d) => {
+      if (d.settings.state !== "accepting") error("応募受付中の場合のみ締め切れます");
+      const t = now();
+      d.settings.state = "closed";
+      d.settings.lastUpdatedAt = t;
+      audit(d, "応募受付締切", "all", "応募受付を締め切り");
+      return { ok: true };
+    });
+  },
+  runLottery: async (r, e) => {
+    await admin(r, e);
+    return change(e.DB, (d) => {
+      if (d.settings.state !== "closed") error("応募受付を締め切ってから抽選してください");
+      const cur = d.entries.filter((v) => v.roundId === d.settings.roundId),
+        { assignments, slots } = allocate(cur, d.settings),
+        used = new Set(),
+        t = now(),
+        win = new Set(assignments.keys());
+      d.entries = d.entries.map((v) =>
+        v.roundId !== d.settings.roundId
+          ? v
+          : {
+              ...v,
+              status: win.has(v.id) ? "winner" : "pending",
+              winnerCode: win.has(v.id) ? code(used) : null,
+              previousWinnerCode: null,
+              drawnAt: t,
+              excludedAt: null,
+              updatedAt: t,
+              assignedInstanceId: assignments.get(v.id)?.instanceId || null,
+              assignedKind: assignments.get(v.id)?.kind || null,
+            },
+      );
+      d.settings = {
+        ...d.settings,
+        state: "drawn",
+        drawnKinds: [...new Set(slots.map((s) => s.kind))],
+        counterWinnerSlots: slots.filter((s) => s.kind === "counter").reduce((n, s) => n + s.capacity, 0),
+        privateWinnerSlots: slots.filter((s) => s.kind === "private").reduce((n, s) => n + s.capacity, 0),
+        tableWinnerSlots: slots.filter((s) => s.kind === "table").reduce((n, s) => n + s.capacity, 0),
+        vacantCounterSlots: 0,
+        vacantPrivateSlots: 0,
+        vacantTableSlots: 0,
+        vacantSlotCounts: {},
+        publishedAt: null,
+        lastUpdatedAt: t,
+      };
+      audit(d, "抽選実行", "all", slots.map((s) => `${s.instanceId}/${labels[s.kind]}${s.capacity}組`).join("、"));
+      return { ok: true };
+    });
+  },
+  redrawLottery: async (r, e, x) => {
+    await admin(r, e);
+    return change(e.DB, (d) => {
+      if (d.settings.state !== "drawn") error("抽選済みの結果がある場合のみ再抽選できます");
+      const cur = d.entries.filter((v) => v.roundId === d.settings.roundId),
+        locks = new Set(x.lockedEntryIds || []),
+        locked = cur.filter((v) => locks.has(v.id) && v.status === "winner"),
+        { assignments } = allocate(cur, d.settings, locks),
+        win = new Set(assignments.keys()),
+        used = new Set(locked.map((v) => v.winnerCode).filter(Boolean)),
+        t = now();
+      d.entries = d.entries.map((v) =>
+        v.roundId !== d.settings.roundId || v.status === "excluded"
+          ? v
+          : {
+              ...v,
+              status: win.has(v.id) ? "winner" : "pending",
+              winnerCode: locks.has(v.id) ? v.winnerCode : win.has(v.id) ? code(used) : null,
+              previousWinnerCode: null,
+              drawnAt: t,
+              updatedAt: t,
+              assignedInstanceId: assignments.get(v.id)?.instanceId || v.assignedInstanceId,
+              assignedKind: assignments.get(v.id)?.kind || v.assignedKind,
+            },
+      );
+      d.settings.vacantCounterSlots = 0;
+      d.settings.vacantPrivateSlots = 0;
+      d.settings.vacantTableSlots = 0;
+      d.settings.publishedAt = null;
+      d.settings.lastUpdatedAt = t;
+      audit(d, "抽選やり直し", "all", `当選確定${locked.length}組・残りを再抽選`);
+      return { ok: true };
+    });
+  },
+  excludeLotteryWinners: async (r, e, x) => {
+    await admin(r, e);
+    return change(e.DB, (d) => {
+      const a = d.entries.filter((v) => x.entryIds?.includes(v.id) && v.status === "winner");
+      if (!a.length) error("除外する当選組を選択してください");
+      const t = now();
+      d.entries = d.entries.map((v) =>
+        a.some((z) => z.id === v.id)
+          ? {
+              ...v,
+              status: "excluded",
+              previousWinnerCode: v.winnerCode,
+              winnerCode: null,
+              excludedAt: t,
+              updatedAt: t,
+            }
+          : v,
+      );
+      for (const v of a)
+        if (v.assignedInstanceId && v.assignedKind) {
+          const id = `${v.assignedInstanceId}:${v.assignedKind}`;
+          d.settings.vacantSlotCounts[id] = (d.settings.vacantSlotCounts[id] || 0) + 1;
+        }
+      for (const k of kinds) d.settings[vacant(k)] += a.filter((v) => (v.assignedKind || v.kind) === k).length;
+      d.settings.state = "drawn";
+      d.settings.publishedAt = null;
+      d.settings.lastUpdatedAt = t;
+      audit(d, "当選者除外", "all", a.map((v) => v.entryNumber).join(", "));
+      return { ok: true };
+    });
+  },
+  undoLotteryExclusions: async (r, e, x) => {
+    await admin(r, e);
+    return change(e.DB, (d) => {
+      if (d.settings.state === "published") error("公開後は除外を取り消せません");
+      const a = d.entries.filter((v) => x.entryIds?.includes(v.id) && v.status === "excluded"),
+        t = now();
+      d.entries = d.entries.map((v) =>
+        a.some((z) => z.id === v.id)
+          ? {
+              ...v,
+              status: "winner",
+              winnerCode: v.previousWinnerCode || code(),
+              previousWinnerCode: null,
+              excludedAt: null,
+              updatedAt: t,
+            }
+          : v,
+      );
+      for (const v of a)
+        if (v.assignedInstanceId && v.assignedKind) {
+          const id = `${v.assignedInstanceId}:${v.assignedKind}`;
+          d.settings.vacantSlotCounts[id] = Math.max(0, (d.settings.vacantSlotCounts[id] || 0) - 1);
+        }
+      for (const k of kinds)
+        d.settings[vacant(k)] = Math.max(
+          0,
+          d.settings[vacant(k)] - a.filter((v) => (v.assignedKind || v.kind) === k).length,
+        );
+      d.settings.lastUpdatedAt = t;
+      audit(d, "除外取消", "all", a.map((v) => v.entryNumber).join(", "));
+      return { ok: true };
+    });
+  },
+  redrawLotteryVacancies: async (r, e) => {
+    await admin(r, e);
+    return change(e.DB, (d) => {
+      const cur = d.entries.filter((v) => v.roundId === d.settings.roundId),
+        a = [],
+        assigned = new Map();
+      for (const [id, n] of Object.entries(d.settings.vacantSlotCounts)) {
+        const s = d.settings.recruitmentSlots.find((v) => v.id === id);
+        if (!s || n <= 0) continue;
+        const candidates = cur.filter(
+          (v) =>
+            v.status === "pending" &&
+            !a.some((z) => z.id === v.id) &&
+            v.peopleCount >= s.minPeople &&
+            v.peopleCount <= s.maxPeople &&
+            (v.preferenceMode === "omakase" || (v.requestedInstanceId === s.instanceId && v.kind === s.kind)),
+        );
+        for (const v of pick(candidates, Math.min(n, candidates.length))) {
+          a.push(v);
+          assigned.set(v.id, { instanceId: s.instanceId, kind: s.kind });
+        }
+      }
+      if (!a.length) error("再抽選できる候補者がいません");
+      const ids = new Set(a.map((v) => v.id)),
+        used = new Set(cur.map((v) => v.winnerCode).filter(Boolean)),
+        t = now();
+      d.entries = d.entries.map((v) =>
+        ids.has(v.id)
+          ? {
+              ...v,
+              status: "winner",
+              winnerCode: code(used),
+              drawnAt: t,
+              updatedAt: t,
+              assignedInstanceId: assigned.get(v.id)?.instanceId || v.assignedInstanceId,
+              assignedKind: assigned.get(v.id)?.kind || v.assignedKind,
+            }
+          : v,
+      );
+      for (const k of kinds) d.settings[vacant(k)] = 0;
+      d.settings.vacantSlotCounts = {};
+      d.settings.state = "drawn";
+      d.settings.lastUpdatedAt = t;
+      audit(d, "空き枠再抽選", "all", `${a.length}組を再抽選`);
+      return { ok: true };
+    });
+  },
+  publishLotteryResults: async (r, e) => {
+    await admin(r, e);
+    return change(e.DB, (d) => {
+      if (d.settings.state !== "drawn") error("抽選済みの結果がありません");
+      if (kinds.some((k) => d.settings[vacant(k)])) error("空き枠の再抽選を完了してください");
+      const t = now();
+      d.entries = d.entries.map((v) =>
+        v.roundId === d.settings.roundId && v.status === "pending" && v.drawnAt
+          ? { ...v, status: "loser", updatedAt: t }
+          : v,
+      );
+      d.settings.state = "published";
+      d.settings.publishedAt = t;
+      d.settings.lastUpdatedAt = t;
+      audit(d, "結果公開", "all", "抽選結果を公開");
+      return { ok: true };
+    });
+  },
+  resetLottery: async (r, e, x) => {
+    await admin(r, e);
+    if (x.confirmation !== "リセット") error("確認欄に「リセット」と入力してください");
+    return change(e.DB, (d) => {
+      const old = d.settings.roundId,
+        n = fresh();
+      for (const key of ["availableKinds", "applicationDeadline", "instances", "recruitmentSlots", "featureSettings"])
+        n.settings[key] = structuredClone(d.settings[key]);
+      n.audits = d.audits;
+      audit(n, "抽選リセット", "all", `ラウンド ${old} をリセット（募集項目設定を保持）`);
+      Object.assign(d, n);
+      return { ok: true };
+    });
+  },
+};
+export default {
+  async fetch(request, env) {
+    const o = origin(request, env);
+    if (request.method === "OPTIONS") return reply({ ok: true }, 200, o);
+    const u = new URL(request.url);
+    if (u.pathname.startsWith("/api/"))
+      try {
+        if (!env.DB) error("共有データベースが設定されていません", 503);
+        const h = api[u.pathname.slice(5)];
+        if (!h) error("APIが見つかりません", 404);
+        return reply(await h(request, env, await request.json().catch(() => ({}))), 200, o);
+      } catch (e) {
+        return reply({ error: e.message || "サーバー処理に失敗しました" }, e.status || 500, o);
+      }
+    const res = await env.ASSETS.fetch(request);
+    if (res.status !== 404) return res;
+    u.pathname = "/index.html";
+    return env.ASSETS.fetch(new Request(u, request));
+  },
+};

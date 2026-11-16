@@ -106,20 +106,20 @@ describe('admin operations', () => {
 
   it('asks the admin to set up slots while accepting with none usable', () => {
     const action = getNextAction(makeSettings({ recruitmentSlots: [] }), []);
-    expect(action.tab).toBe('recruitment');
+    expect(action.tab).toBe('settings');
     expect(action.tone).toBe('warning');
   });
 
   it('suggests closing while accepting with slots', () => {
     const action = getNextAction(makeSettings({ state: 'accepting' }), []);
-    expect(action.tab).toBe('draw');
+    expect(action.tab).toBe('lottery');
     expect(action.tone).toBe('info');
   });
 
   it('suggests redraw when vacancies remain after drawn state', () => {
     const action = getNextAction(makeSettings({ state: 'drawn', vacantCounterSlots: 1 }), []);
     expect(action.title).toBe('空き枠の再抽選が必要です');
-    expect(action.tab).toBe('results');
+    expect(action.tab).toBe('lottery');
   });
 
   it('suggests publishing when drawn with no vacancies', () => {
